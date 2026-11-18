@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - One docatz-vmm per VM: a second `run` on the same data disk exits 3 and names the running one (`vmm.lock`),
   instead of taking the first one's sockets and failing on its disk.

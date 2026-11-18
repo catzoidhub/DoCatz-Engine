@@ -3,7 +3,7 @@ import Virtualization
 
 // docatz-vmm — DoCatz's VM helper on Virtualization.framework (docs/CONTRACT.md).
 
-let VERSION = "0.1.0"
+let VERSION = "0.1.1"
 let PROTOCOL = 1
 
 setvbuf(stdout, nil, _IOLBF, 0)
