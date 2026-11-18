@@ -311,11 +311,15 @@ func forward(c net.Conn) {
 		return
 	}
 	f := strings.Fields(line)
-	if len(f) != 2 || f[0] != "tcp" {
+	if len(f) != 2 || (f[0] != "tcp" && f[0] != "udp") {
 		return
 	}
 	port, err := strconv.Atoi(f[1])
 	if err != nil || port < 1 || port > 65535 {
+		return
+	}
+	if f[0] == "udp" {
+		forwardUDP(c, r, f[1])
 		return
 	}
 	// 127.0.0.1 first (it also reaches 0.0.0.0 listeners), then ::1 for an IPv6-only listener.
@@ -334,6 +338,44 @@ func forward(c net.Conn) {
 		}
 	}
 	pipe(c, t)
+}
+
+// forwardUDP: one stream per client on the Mac. Each datagram is a frame (2-byte big-endian length, then the bytes),
+// both ways; the stream ends when the Mac closes it or after 90 s without a datagram.
+func forwardUDP(c net.Conn, r *bufio.Reader, port string) {
+	u, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		return
+	}
+	defer u.Close()
+	go func() {
+		buf := make([]byte, 65535+2)
+		for {
+			_ = u.SetReadDeadline(time.Now().Add(90 * time.Second))
+			n, err := u.Read(buf[2:])
+			if err != nil {
+				c.Close()
+				return
+			}
+			buf[0], buf[1] = byte(n>>8), byte(n)
+			if _, err := c.Write(buf[:n+2]); err != nil {
+				return
+			}
+		}
+	}()
+	head := make([]byte, 2)
+	data := make([]byte, 65535)
+	for {
+		if _, err := io.ReadFull(r, head); err != nil {
+			return
+		}
+		n := int(head[0])<<8 | int(head[1])
+		if _, err := io.ReadFull(r, data[:n]); err != nil {
+			return
+		}
+		// A refused datagram (nothing listening yet) is not the stream's end.
+		_, _ = u.Write(data[:n])
+	}
 }
 
 // pipe copies both ways; each side's end half-closes the other, so request / response protocols finish.
@@ -504,10 +546,17 @@ func parseStamp(s string) (unix.Timespec, error) {
 
 // ---------------------------------------------------------------- listening ports
 
+// A UDP port is kept in the same sorted list as the TCP ones, above them (port + udpBase).
+const udpBase = 1 << 16
+
 func portList(ports []int) []map[string]any {
 	out := make([]map[string]any, 0, len(ports))
 	for _, p := range ports {
-		out = append(out, map[string]any{"proto": "tcp", "port": p})
+		if p >= udpBase {
+			out = append(out, map[string]any{"proto": "udp", "port": p - udpBase})
+		} else {
+			out = append(out, map[string]any{"proto": "tcp", "port": p})
+		}
 	}
 	return out
 }
@@ -552,8 +601,38 @@ func listening() []int {
 			}
 		}
 	}
+	// UDP: sockets bound (not connected) to any address or loopback, below the ephemeral range — what `-p …/udp` and a
+	// host-network server make; a client's own socket has an ephemeral port. 68 is the guest's DHCP client.
+	low := 32768
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
+		if f := strings.Fields(string(b)); len(f) == 2 {
+			if v, err := strconv.Atoi(f[0]); err == nil {
+				low = v
+			}
+		}
+	}
+	for _, f := range []string{"/proc/net/udp", "/proc/net/udp6"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n")[1:] {
+			fields := strings.Fields(line)
+			if len(fields) < 4 {
+				continue
+			}
+			addr, portHex, ok := strings.Cut(fields[1], ":")
+			rem, remPort, ok2 := strings.Cut(fields[2], ":")
+			if !ok || !ok2 || !forwardable(addr) || strings.Trim(rem, "0") != "" || strings.Trim(remPort, "0") != "" {
+				continue
+			}
+			if p, err := strconv.ParseInt(portHex, 16, 32); err == nil && p > 0 && int(p) < low && p != 68 {
+				seen[udpBase+int(p)] = true
+			}
+		}
+	}
 	out := make([]int, 0, len(seen))
-	for p := 1; p <= 65535 && len(out) < len(seen); p++ {
+	for p := 1; p < 2*udpBase && len(out) < len(seen); p++ {
 		if seen[p] {
 			out = append(out, p)
 		}

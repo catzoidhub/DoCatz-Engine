@@ -103,6 +103,7 @@ cat > "$OUT/guest.json" <<JSON
   "protocol": 1,
   "arch": "$ARCH",
   "cmdline": "console=hvc0 loglevel=4 cgroup_no_v1=all init_on_alloc=0 oops=panic panic=-1",
+  "capabilities": ["docker", "ports-tcp", "ports-udp", "ports-loopback", "fsevents", "trim", "rosetta", "restart-on-panic", "data-dir"],
   "versions": { "kernel": "$KVER", "alpine": "$ALPINE", "docker": "$(v docker-engine)", "containerd": "$(v containerd)", "runc": "$(v runc)" }
 }
 JSON

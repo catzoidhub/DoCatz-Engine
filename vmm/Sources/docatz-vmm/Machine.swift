@@ -28,13 +28,17 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private var dockerReady = false
     private var targetMiB: UInt64 = 0
     private var stopping = false
+    /// `sleep`: the guest is being stopped, or is stopped, while this process keeps the sockets; a connection boots it.
+    private var sleeping = false
 
     private var agentFd: Int32 = -1
     private var agentSeq = 0
     private var agentWaiting: [Int: (JSON) -> Void] = [:]
     private var subscribers: [Int32] = []
-    private var forwards: [UInt16: [Int32]] = [:]
-    private var forwardErrors: [UInt16: String] = [:]
+    /// Forwarded ports by key: the port for TCP, port + 65536 for UDP.
+    private var forwards: [Int: [Int32]] = [:]
+    private var udpRelays: [Int: [UDPRelay]] = [:]
+    private var forwardErrors: [Int: String] = [:]
     private var signalSources: [DispatchSourceSignal] = []
     /// Host-side ends of the Docker socket and port connections now open: closed when the guest goes away, so no client
     /// waits forever on a guest that rebooted.
@@ -176,7 +180,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         lock.lock()
         let now = Date()
         crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
-        let again = !stopping && crashes.count <= 3
+        let again = !stopping && !sleeping && crashes.count <= 3
         if again {
             state = "starting"
             dockerReady = false
@@ -364,6 +368,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     // ------------------------------------------------------------------ Docker socket and ports
 
     private func serveDocker(_ c: Int32) {
+        wake()
         // Before dockerd is ready a connection waits (up to 60 s) rather than failing.
         for _ in 0..<600 {
             lock.lock()
@@ -393,7 +398,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     /// the same VM. Open connections end now; `running` comes again when the new guest's dockerd is ready.
     private func guestWentAway() {
         lock.lock()
-        if stopping { lock.unlock(); return }
+        if stopping || sleeping { lock.unlock(); return }
         let now = Date()
         crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
         let n = crashes.count
@@ -412,28 +417,44 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     }
 
     private func updateForwards(_ list: [JSON]) {
-        let want = Set(list.compactMap { ($0["proto"] as? String ?? "tcp") == "tcp" ? ($0["port"] as? Int).flatMap { UInt16(exactly: $0) } : nil })
+        let want = Set(list.compactMap { o -> Int? in
+            guard let p = (o["port"] as? Int).flatMap({ UInt16(exactly: $0) }), p > 0 else { return nil }
+            switch o["proto"] as? String ?? "tcp" {
+            case "tcp": return Int(p)
+            case "udp": return Int(p) + 65536
+            default: return nil
+            }
+        })
         lock.lock()
         let have = Set(forwards.keys)
         lock.unlock()
-        for port in have.subtracting(want) {
+        for key in have.subtracting(want) {
             lock.lock()
-            let fds = forwards.removeValue(forKey: port) ?? []
-            forwardErrors.removeValue(forKey: port)
+            let fds = forwards.removeValue(forKey: key) ?? []
+            let relays = udpRelays.removeValue(forKey: key) ?? []
+            forwardErrors.removeValue(forKey: key)
             lock.unlock()
-            for fd in fds { shutdown(fd, SHUT_RDWR); close(fd) }
+            if key >= 65536 { for r in relays { r.close() } } else { for fd in fds { shutdown(fd, SHUT_RDWR); close(fd) } }
         }
-        for port in want.subtracting(have) {
+        for key in want.subtracting(have) {
+            let port = UInt16(key % 65536)
             var fds: [Int32] = []
+            var relays: [UDPRelay] = []
             for v6 in [false, true] {
-                if let fd = listenLoopback(port: port, v6: v6) {
+                if key >= 65536 {
+                    if let fd = bindLoopbackUDP(port: port, v6: v6) {
+                        fds.append(fd)
+                        relays.append(UDPRelay(fd: fd, port: port) { [weak self] in self?.vsock(GuestPort.forward) })
+                    }
+                } else if let fd = listenLoopback(port: port, v6: v6) {
                     fds.append(fd)
                     acceptLoop(fd) { [weak self] c in self?.serveForward(c, port: port) }
                 }
             }
             lock.lock()
-            forwards[port] = fds
-            if fds.isEmpty { forwardErrors[port] = "in use" } else { forwardErrors.removeValue(forKey: port) }
+            forwards[key] = fds
+            if !relays.isEmpty { udpRelays[key] = relays }
+            if fds.isEmpty { forwardErrors[key] = "in use" } else { forwardErrors.removeValue(forKey: key) }
             lock.unlock()
         }
         if want != have { emit(["event": "ports", "ports": portList()]) }
@@ -442,9 +463,9 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private func portList() -> [JSON] {
         lock.lock()
         defer { lock.unlock() }
-        return forwards.keys.sorted().map { p in
-            var o: JSON = ["proto": "tcp", "port": Int(p)]
-            if let e = forwardErrors[p] { o["error"] = e }
+        return forwards.keys.sorted().map { k in
+            var o: JSON = ["proto": k >= 65536 ? "udp" : "tcp", "port": k % 65536]
+            if let e = forwardErrors[k] { o["error"] = e }
             return o
         }
     }
@@ -478,7 +499,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         return [
             "state": state, "version": VERSION, "protocol": PROTOCOL, "pid": Int(getpid()), "guest": guest,
             "memory": ["configuredMiB": config.memoryMiB, "targetMiB": targetMiB],
-            "ports": forwards.keys.sorted().map { ["proto": "tcp", "port": Int($0)] },
+            "ports": forwards.keys.sorted().map { ["proto": $0 >= 65536 ? "udp" : "tcp", "port": $0 % 65536] },
         ]
     }
 
@@ -498,6 +519,11 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
             case "stop":
                 answer(["stopping": true])
                 stop(timeout: params["timeoutSec"] as? Double ?? 20)
+            case "sleep":
+                if let e = sleep(timeout: params["timeoutSec"] as? Double ?? 20) { refuse(e) } else { answer(["sleeping": true]) }
+            case "wake":
+                wake()
+                answer(["waking": true])
             case "kill":
                 answer(["killed": true])
                 kill()
@@ -541,13 +567,75 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
 
     // ------------------------------------------------------------------ stop, save, wake
 
+    /// Idle sleep: the guest stops cleanly (dockerd first) and its memory goes back to the Mac; this process stays with
+    /// the Docker socket, and the first connection to it boots the guest again (`wake`). Cold boot, not a saved state:
+    /// a restored VM comes back with all of its configured memory resident (measured, macOS 26).
+    func sleep(timeout: Double) -> String? {
+        lock.lock()
+        guard state == "running", !stopping, !sleeping else {
+            let now = state
+            lock.unlock()
+            return "the VM is \(now), not running"
+        }
+        sleeping = true
+        state = "stopping"
+        lock.unlock()
+        emit(["event": "state", "state": "stopping", "sleep": true])
+        Thread.detachNewThread { [self] in
+            _ = agent(["op": "shutdown"], timeout: timeout)
+            // guestDidStop → asleep(). A guest that does not power off in time is ended.
+            Thread.sleep(forTimeInterval: timeout)
+            lock.lock()
+            let still = sleeping && state == "stopping"
+            lock.unlock()
+            if still { queue.async { [self] in if vm.canStop { vm.stop { [self] _ in asleep() } } else { asleep() } } }
+        }
+        return nil
+    }
+
+    private func asleep() {
+        lock.lock()
+        guard sleeping, state == "stopping" else { lock.unlock(); return }
+        state = "sleeping"
+        dockerReady = false
+        agentVersion = nil
+        bootMs = nil
+        let open = active
+        lock.unlock()
+        for fd in open { shutdown(fd, SHUT_RDWR) }
+        updateForwards([])
+        queue.async { [self] in
+            vm = nil
+            socketDevice = nil
+            balloon = nil
+            socketListener = nil
+        }
+        Out.log("asleep: the guest is stopped; a Docker connection wakes it")
+        emit(["event": "state", "state": "sleeping"])
+    }
+
+    /// Boots a sleeping guest (a Docker connection, or `wake`). Nothing otherwise.
+    func wake() {
+        lock.lock()
+        guard sleeping, state == "sleeping" else { lock.unlock(); return }
+        sleeping = false
+        state = "starting"
+        started = Date()
+        lock.unlock()
+        Out.log("waking")
+        emit(["event": "state", "state": "starting", "wake": true])
+        queue.async { [self] in createAndBoot(restoreFrom: nil) }
+    }
+
     func stop(timeout: Double) {
         lock.lock()
         if stopping { lock.unlock(); return }
         stopping = true
+        let wasAsleep = state == "sleeping"
         state = "stopping"
         lock.unlock()
         emit(["event": "state", "state": "stopping"])
+        if wasAsleep { return finish(code: 0) }
         Thread.detachNewThread { [self] in
             // The agent stops dockerd (its containers stop), syncs and powers off; the framework then says guestDidStop.
             if agent(["op": "shutdown"], timeout: timeout) == nil {
@@ -618,6 +706,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
 
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         Out.log("guest stopped")
+        lock.lock()
+        let toSleep = sleeping
+        lock.unlock()
+        if toSleep { return asleep() }
         if restartAfterCrash("the guest restarted") { return }
         finish(code: 0)
     }

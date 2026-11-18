@@ -16,11 +16,12 @@ own (DoCatz TODO #106, "Lite 2"); neither uses `docatz-vmm`.
 | guest kernel | Alpine's `linux-virt`, uncompressed (`vmlinux`) | in the VM |
 | `initramfs.img` | busybox + the modules needed to reach the root disk; mounts it and switches to it | in the VM, first second of boot |
 | `rootfs.img` | Alpine minimal + dockerd / containerd / runc + `docatz-agent`, ext4, **read-only** | the VM's `vda` |
-| data disk | `data.img`, sparse raw, ext4, made on first boot: `/var/lib/docker`, the writable layer over `/etc` and `/var` | the VM's `vdb` |
+| data disk | `data.img`, sparse raw, ext4, made on first boot: `/var/lib/docker`, `/var/lib/containerd`, and `/var/lib/docatz` (kept for what is not Docker's: later machines / clusters). Everything else in the guest is a tmpfs layer that is new at each boot | the VM's `vdb` |
 | `docatz-agent` | the guest's PID 1 after the switch: starts dockerd, forwards the Docker socket and ports over vsock, answers the control stream | in the VM |
 
 Minimum macOS: **13.0** (Ventura) — the same as DoCatz (`electron-builder.yml`). Rosetta needs Apple silicon and 13.0;
-saving / restoring the VM's state (`save`, `restore`) needs **14.0** and is refused below it. Intel Macs run the x86_64
+saving / restoring the VM's state (`save`, `restoreFrom`) needs **14.0** and Apple silicon and is refused otherwise
+(and is not the way to save memory: a restored VM has all of its memory resident — use `sleep`). Intel Macs run the x86_64
 build without Rosetta.
 
 ## 2. Release files
@@ -60,6 +61,11 @@ DoCatz pins the four archives by SHA-256 in `components.ts` like Standard's file
 pin). `guest.json` inside the guest archive repeats `version`, `protocol` and `versions`, and adds `cmdline` (the
 kernel command line the guest expects; DoCatz passes it unchanged).
 
+`guest.json` also lists `capabilities` (`docker`, `ports-tcp`, `ports-udp`, `ports-loopback`, `fsevents`, `trim`,
+`rosetta`, `restart-on-panic`, `data-dir`, …). New guest features are **added to this list** and never raise `protocol`:
+DoCatz asks for a capability before using it and ignores the ones it does not know, so an older DoCatz accepts a newer
+guest.
+
 Archives are plain gzip'd tar (`tar -xzf`), so no zstd is needed on the Mac. `rootfs.img` is stored sparse.
 
 ## 3. Files on the Mac
@@ -73,6 +79,7 @@ DoCatz chooses the folders. The suggested layout, next to Standard's `~/.docatz/
 ~/.docatz/lite/vm/vmm.sock           docatz-vmm's control socket (0600)
 ~/.docatz/lite/vm/console.log        the guest's console (kernel + agent log), truncated at each start
 ~/.docatz/lite/vm/state.vzstate      a saved state (save / restore, macOS 14+)
+~/.docatz/lite/vm/machine-id, mac    the VM's identity (made by docatz-vmm next to data.img; Reset deletes them with it)
 ~/.docatz/run/docker.sock            the Docker socket: the same path as Standard, so the `docatz` context does not change
 ```
 
@@ -138,8 +145,10 @@ answers echo it; events have no `id`. Never TCP.
 
 | Method | Params | Does |
 | --- | --- | --- |
-| `status` | — | as above; `state` is `starting`, `running`, `stopping`, `stopped` or `error` |
+| `status` | — | as above; `state` is `starting`, `running`, `stopping`, `sleeping`, `stopped` or `error` |
 | `stop` | `{"timeoutSec":20}` | asks the guest to stop (dockerd stops its containers, file systems are synced), then ends the VM after the timeout; the process exits when it is stopped |
+| `sleep` | `{"timeoutSec":20}` | idle sleep: the guest stops cleanly (as `stop`) and its memory goes back to the Mac, but the process stays (about 12 MB) with the Docker socket; `state` becomes `sleeping`. The **first connection to the Docker socket** (or `wake`) boots it again, about 2 s; containers with a restart policy come back. Refused unless `running`. DoCatz decides when (nothing running, nobody using it) and must not touch the socket itself while it wants the VM asleep. Published ports are not listened on while asleep |
+| `wake` | — | boots a sleeping guest; nothing otherwise |
 | `kill` | — | ends the VM at once (last resort; the data disk may need its journal replayed) |
 | `ports` | — | the forwarded ports |
 | `fsevents` | `{"files":[{"path":"/Users/me/site/app.js","mtime":"1731900000.123456789"}]}` | raises inotify events in the guest for files changed on the Mac (virtiofs does not) by setting each file's modification time again to the Mac's value (seconds.nanoseconds, as Standard's `touch -c -m -d @<mtime>`), so nothing changes; up to 1000 files per call |
@@ -160,6 +169,9 @@ On `run`'s stdout and on subscribed connections:
 {"event":"state","state":"starting","restart":1,"reason":"the guest restarted"}
                                           the guest crashed (a kernel panic reboots it) and is booting again;
                                           at most 3 times a minute, then `error` and exit 1
+{"event":"state","state":"stopping","sleep":true}    `sleep` was asked
+{"event":"state","state":"sleeping"}
+{"event":"state","state":"starting","wake":true}     a Docker connection or `wake`
 {"event":"state","state":"stopping"}
 {"event":"state","state":"stopped"}
 {"event":"error","message":"..."}
@@ -174,7 +186,10 @@ On `run`'s stdout and on subscribed connections:
   makes) **or on the VM's loopback** (`127.0.0.1` / `::1`, as Lima forwards them: DoCatz's `docatz-router` runs on the
   VM's host network on 127.0.0.1) is listened on at `127.0.0.1` and `::1` on the Mac, and each connection goes over
   vsock to the agent, which connects to it in the guest. A port that is taken on the Mac is skipped and reported in the
-  `ports` event with `"error":"in use"`. UDP: not yet.
+  `ports` event with `"error":"in use"`.
+- **UDP ports** (`{"proto":"udp",…}` in `ports`): sockets bound in the guest to every address or loopback, below
+  the ephemeral range (what `-p 53:53/udp` makes), are bound on `127.0.0.1` and `::1` on the Mac; each client address
+  gets its own stream to the guest, kept for 60 s after its last datagram. Datagrams up to 65,535 bytes.
 - **A guest that crashes** reboots inside the same VM (`oops=panic panic=-1` in guest.json's cmdline): the open Docker
   and port connections end at once (no client waits on a dead guest), `state` goes `starting` with `restart` and back
   to `running` about a second later. More than 3 restarts in a minute ends `run` with an error.

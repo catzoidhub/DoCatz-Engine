@@ -13,6 +13,11 @@ First release, for DoCatz's Lite engine (beta) on macOS.
 
 ## Unreleased
 
+- UDP ports are forwarded (127.0.0.1 and ::1), a stream per client.
+- `sleep` / `wake`: the guest stops and gives its memory back while docatz-vmm keeps the Docker socket (about 12 MB);
+  the first Docker connection boots it again in about 2 s.
+- The root disk's read-ahead is 32 KB: about 20 MB less page cache at idle.
+- `guest.json` lists `capabilities`; `/var/lib/docatz` on the data disk is kept for what is not Docker's.
 - Ports the VM listens on at 127.0.0.1 / ::1 are forwarded too (DoCatz's router: domains and DBCatz's database ports).
 - A guest kernel crash no longer leaves a dead engine: `oops=panic panic=-1`, the guest reboots in place in about a
   second, open connections end, `state` reports `starting` with `restart` (rare oopses were seen in freshly loaded

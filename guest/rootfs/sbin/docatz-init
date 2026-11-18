@@ -36,7 +36,9 @@ e2fsck -p /dev/vdb >/dev/null 2>&1
 mkdir -p /mnt/data
 mount -o noatime /dev/vdb /mnt/data || log "the data disk did not mount"
 resize2fs /dev/vdb >/dev/null 2>&1
-mkdir -p /mnt/data/docker /mnt/data/containerd /var/lib/docker /var/lib/containerd
+# docatz/: room for what is not Docker's (later: machines, clusters), so it never mixes with /var/lib/docker.
+mkdir -p /mnt/data/docker /mnt/data/containerd /mnt/data/docatz /var/lib/docker /var/lib/containerd /var/lib/docatz
+mount --bind /mnt/data/docatz /var/lib/docatz
 mount --bind /mnt/data/docker /var/lib/docker
 mount --bind /mnt/data/containerd /var/lib/containerd
 echo 1 > /mnt/data/layout
@@ -72,6 +74,10 @@ fi
 log "shares mounted"
 tz=$(jq -r '.tz // empty' /run/docatz/cfg.json)
 [ -n "$tz" ] && echo "$tz" > /etc/timezone
+
+# The root disk is read a little at a time: with the default read-ahead the page cache holds parts of dockerd and
+# containerd nobody asked for, and memory a guest has touched never goes back to the Mac.
+echo "${DOCATZ_READAHEAD_KB:-32}" > /sys/block/vda/queue/read_ahead_kb 2>/dev/null
 
 sysctl -q -w fs.inotify.max_user_watches=1048576 fs.inotify.max_user_instances=8192 vm.max_map_count=262144 net.ipv4.ip_forward=1 2>/dev/null
 ulimit -n 1048576
