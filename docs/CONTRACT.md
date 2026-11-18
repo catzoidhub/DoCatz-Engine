@@ -80,6 +80,7 @@ DoCatz chooses the folders. The suggested layout, next to Standard's `~/.docatz/
 ~/.docatz/lite/vm/vmm.sock           docatz-vmm's control socket (0600)
 ~/.docatz/lite/vm/console.log        the guest's console (kernel + agent log), truncated at each start
 ~/.docatz/lite/vm/state.vzstate      a saved state (save / restore, macOS 14+)
+~/.docatz/lite/vm/vmm.lock           held by the running docatz-vmm (its pid inside)
 ~/.docatz/lite/vm/machine-id, mac    the VM's identity (made by docatz-vmm next to data.img; Reset deletes them with it)
 ~/.docatz/run/docker.sock            the Docker socket: the same path as Standard, so the `docatz` context does not change
 ```
@@ -97,7 +98,8 @@ docatz-vmm disk --path <data.img> --size-gib <n>
 docatz-vmm run --config <config.json>
     starts the VM and runs until it stops. stdout: one JSON event per line (§6); stderr: the helper's own log.
     Exit 0 = the VM stopped cleanly, 1 = it failed (the last stdout line is {"event":"error","message":"..."}),
-    2 = bad config.
+    2 = bad config, 3 = another docatz-vmm already runs this VM (`vmm.lock` next to the data disk holds its pid; the
+    error line carries it as `running`): talk to that one through its control socket instead.
 
 docatz-vmm ctl --socket <vmm.sock> <method> [json params]
     sends one control request (§5) and prints the answer — for people and tests.

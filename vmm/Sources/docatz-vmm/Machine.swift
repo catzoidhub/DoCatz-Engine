@@ -132,7 +132,28 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         return id
     }
 
+    /// One docatz-vmm per data disk: a second one (DoCatz's app and its helper both starting Lite) would replace the
+    /// first one's sockets and then fail on the disk the first VM holds, leaving the first unreachable.
+    private var lockFd: Int32 = -1
+
+    private func takeLock() {
+        let path = (config.data as NSString).deletingLastPathComponent + "/vmm.lock"
+        lockFd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard lockFd >= 0 else { fail("cannot open \(path): \(String(cString: strerror(errno)))") }
+        if flock(lockFd, LOCK_EX | LOCK_NB) != 0 {
+            var buf = [UInt8](repeating: 0, count: 32)
+            let n = pread(lockFd, &buf, buf.count, 0)
+            let other = n > 0 ? String(decoding: buf[0..<n], as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) : "?"
+            Out.event(["event": "error", "message": "another docatz-vmm (pid \(other)) is already running this VM", "running": Int(other) ?? 0])
+            exit(3)
+        }
+        ftruncate(lockFd, 0)
+        let me = "\(getpid())\n"
+        _ = me.withCString { pwrite(lockFd, $0, strlen($0), 0) }
+    }
+
     func start() {
+        takeLock()
         Out.event(["event": "state", "state": "starting"])
         let built: VZVirtualMachineConfiguration
         do { built = try build() } catch { fail("the VM could not be set up: \(error.localizedDescription)") }
