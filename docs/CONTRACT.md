@@ -4,7 +4,7 @@ What DoCatz's Lite backend (`DoCatz/src/main/engine/`) can rely on. Anything not
 releases. Changes that break it raise `protocol` (below); DoCatz refuses a `docatz-vmm` / guest whose protocol it does
 not know.
 
-Status: **v0.1.5 (2026-11-19)** — 0.1.0 plus one docatz-vmm per VM (`vmm.lock`, exit 3, 0.1.1), a shared `/` in the guest (`shared-mounts`, 0.1.2) docatz-vmm signed with Developer ID (0.1.3) and containerd's Rust shim as the default runtime (`shim-rs`, 0.1.4) and `host.docker.internal` reaching the Mac's loopback (`host-loopback`, `host-dns`, 0.1.5); protocol unchanged. Tested on Apple silicon (macOS 26): Docker ready ~1 s after `run`, TCP / UDP /
+Status: **v0.1.6 (2026-11-19)** — 0.1.0 plus one docatz-vmm per VM (`vmm.lock`, exit 3, 0.1.1), a shared `/` in the guest (`shared-mounts`, 0.1.2) docatz-vmm signed with Developer ID (0.1.3) and containerd's Rust shim as the default runtime (`shim-rs`, 0.1.4) and `host.docker.internal` reaching the Mac's loopback (`host-loopback`, `host-dns`, 0.1.5; `*.localhost` too, 0.1.6); protocol unchanged. Tested on Apple silicon (macOS 26): Docker ready ~1 s after `run`, TCP / UDP /
 loopback ports, shares, Rosetta, `fsevents`, `trim`, `sleep` / `wake`, `stop`, crash restart. Not yet tried on an Intel
 Mac or on macOS 13–15. macOS only: Windows Lite stays on WSL2 and Linux Lite waits for the daemon of our own (DoCatz
 TODO #106, "Lite 2"); neither uses `docatz-vmm`.

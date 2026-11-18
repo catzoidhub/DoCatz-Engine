@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
 - `<name>.localhost` resolves in every container to the Mac's loopback (`198.19.200.2`, A only), so
   `https://rustfs.localhost` (DevCatz) and `<name>.docatz.localhost` (DoCatz) reach the Catzoid proxies on the Mac's

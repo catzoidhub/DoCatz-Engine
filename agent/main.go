@@ -29,7 +29,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var version = "0.1.5"
+var version = "0.1.6"
 
 const (
 	portDocker  = 2375
