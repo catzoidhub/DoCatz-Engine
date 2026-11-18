@@ -1,0 +1,110 @@
+name: Release
+
+# A tag v<VERSION> builds every asset of docs/CONTRACT.md §2 and puts them on a DRAFT release; the maintainer
+# publishes it after checking. DoCatz then pins the archives' SHA-256 from manifest.json.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  vmm:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
+      # Developer ID signing when the secrets exist (as DoCatz's release); else ad hoc, which is enough for the
+      # virtualization entitlement (the binary is downloaded by DoCatz, not opened from Finder).
+      - name: Import the signing certificate
+        if: env.MAC_CERT_P12 != ''
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          echo "$MAC_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
+          echo "IDENTITY=$(security find-identity -v -p codesigning build.keychain | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)" >> "$GITHUB_ENV"
+        shell: bash
+      - name: Build
+        run: |
+          sh vmm/build.sh arm64 "${IDENTITY:--}"
+          sh vmm/build.sh x86_64 "${IDENTITY:--}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vmm
+          path: out/docatz-vmm-*
+
+  guest:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Build the guest
+        run: sh guest/build.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-${{ matrix.arch }}
+          path: out/guest-${{ matrix.arch }}
+
+  kernel-source:
+    needs: guest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: guest-x86_64
+          path: out/guest-x86_64
+      - name: Fetch the kernel's corresponding source
+        run: |
+          KREL=$(sed -n 's/.*"kernel": "\([^"]*\)".*/\1/p' out/guest-x86_64/guest.json)
+          ALPINE=$(sed -n 's/.*"alpine": "\([^"]*\)".*/\1/p' out/guest-x86_64/guest.json)
+          sh guest/kernel-source.sh "$KREL" "$ALPINE" out/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-source
+          path: out/release/*.tar.xz
+
+  release:
+    needs: [vmm, guest, kernel-source]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Pack
+        run: |
+          mkdir -p out/release
+          cp dl/vmm/docatz-vmm-* out/
+          chmod +x out/docatz-vmm-*
+          cp -R dl/guest-arm64 out/guest-arm64
+          cp -R dl/guest-x86_64 out/guest-x86_64
+          cp dl/kernel-source/*.tar.xz out/release/
+          sh scripts/package.sh
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(cat VERSION)
+          gh release create "v$V" --draft --title "DoCatz Engine $V" --notes-file <(sed -n "/^## $V/,/^## /p" CHANGELOG.md | sed '$d') out/release/*
+        shell: bash

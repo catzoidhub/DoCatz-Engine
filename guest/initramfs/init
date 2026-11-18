@@ -1,0 +1,36 @@
+#!/bin/busybox sh
+# DoCatz Lite guest, first second of boot: load what reaches the root disk, mount it read-only under a tmpfs
+# overlay (nothing written there outlives the VM; the data disk keeps what must), switch to it.
+/bin/busybox --install -s /bin
+export PATH=/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+panic() {
+	echo "docatz initramfs: $*"
+	sleep 5
+	echo o > /proc/sysrq-trigger
+	poweroff -f
+}
+
+while read -r m; do insmod "$m" 2>/dev/null; done < /modules.list
+
+i=0
+while [ ! -b /dev/vda ]; do
+	i=$((i + 1))
+	[ "$i" -gt 200 ] && panic "no root disk (vda)"
+	usleep 25000
+done
+
+mkdir -p /lower /upper /newroot
+mount -t ext4 -o ro /dev/vda /lower || panic "the root disk does not mount"
+mount -t tmpfs -o mode=0755 tmpfs /upper
+mkdir -p /upper/up /upper/work
+mount -t overlay overlay -o lowerdir=/lower,upperdir=/upper/up,workdir=/upper/work /newroot || panic "overlay"
+mkdir -p /newroot/run/docatz/lower /newroot/run/docatz/upper
+mount --move /lower /newroot/run/docatz/lower
+mount --move /upper /newroot/run/docatz/upper
+mount --move /dev /newroot/dev
+umount /sys /proc
+exec switch_root /newroot /sbin/docatz-init

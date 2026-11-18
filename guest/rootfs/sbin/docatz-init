@@ -1,0 +1,80 @@
+#!/bin/sh
+# DoCatz Lite guest: system setup, then docatz-agent becomes PID 1 (it starts dockerd).
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+log() { echo "docatz-init [$(cut -d" " -f1 /proc/uptime 2>/dev/null)] $*"; }
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mkdir -p /dev/pts /dev/shm
+mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
+mount -t tmpfs -o mode=1777 shm /dev/shm
+mount -t tmpfs -o mode=0755 tmpfs /run
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+mount -t cgroup2 cgroup2 /sys/fs/cgroup
+mkdir -p /run/docatz
+hostname docatz
+
+for m in vmw_vsock_virtio_transport virtio_net virtio_balloon virtio_console virtiofs fuse binfmt_misc \
+	overlay bridge br_netfilter veth tun ip_tables ip6_tables iptable_nat iptable_filter ip6table_nat ip6table_filter \
+	nf_nat nf_conntrack xt_MASQUERADE xt_addrtype xt_conntrack nft_chain_nat nft_compat; do
+	modprobe -q "$m" 2>/dev/null
+done
+
+log "modules loaded"
+# What docatz-vmm passed: shares, Rosetta, time zone (base64url JSON, docatz.cfg=…).
+cfg=$(sed -n 's/.*docatz\.cfg=\([^ ]*\).*/\1/p' /proc/cmdline | tr '_-' '/+')
+while [ $((${#cfg} % 4)) -ne 0 ]; do cfg="$cfg="; done
+cfg=$(printf '%s' "$cfg" | base64 -d 2>/dev/null || echo '{}')
+echo "$cfg" > /run/docatz/cfg.json
+
+# The data disk: made on first boot, grown when the Mac grew its file, checked, mounted.
+if ! blkid /dev/vdb >/dev/null 2>&1; then
+	log "formatting the data disk"
+	mkfs.ext4 -q -L docatz-data -E lazy_itable_init=1,lazy_journal_init=1 /dev/vdb
+fi
+e2fsck -p /dev/vdb >/dev/null 2>&1
+mkdir -p /mnt/data
+mount -o noatime /dev/vdb /mnt/data || log "the data disk did not mount"
+resize2fs /dev/vdb >/dev/null 2>&1
+mkdir -p /mnt/data/docker /mnt/data/containerd /var/lib/docker /var/lib/containerd
+mount --bind /mnt/data/docker /var/lib/docker
+mount --bind /mnt/data/containerd /var/lib/containerd
+echo 1 > /mnt/data/layout
+
+log "data disk ready"
+# Network: the Mac's NAT. dockerd's host-gateway and host.docker.internal are the gateway (the Mac).
+ip link set lo up
+ip link set eth0 up
+udhcpc -i eth0 -b -t 40 -T 1 -A 1 -s /usr/share/udhcpc/default.script >/dev/null 2>&1
+gw=$(ip route | awk '/^default/ { print $3; exit }')
+if [ -n "$gw" ]; then
+	echo "$gw host.docker.internal" >> /etc/hosts
+	jq --arg gw "$gw" '. + {"host-gateway-ip": $gw}' /etc/docker/daemon.json > /run/docatz/daemon.json && cat /run/docatz/daemon.json > /etc/docker/daemon.json
+fi
+
+log "network ready (gateway $gw)"
+# The Mac's folders, at the same paths.
+jq -r '.shares[]? | "\(.tag)\t\(.ro)\t\(.path)"' /run/docatz/cfg.json | while IFS="$(printf '\t')" read -r tag ro path; do
+	mkdir -p "$path"
+	opt=rw
+	[ "$ro" = true ] && opt=ro
+	mount -t virtiofs -o "$opt" "$tag" "$path" || log "share $tag did not mount at $path"
+done
+
+# Rosetta for amd64 images (Apple silicon).
+if [ "$(jq -r '.rosetta // false' /run/docatz/cfg.json)" = true ]; then
+	mkdir -p /run/rosetta
+	mount -t virtiofs rosetta /run/rosetta
+	mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null
+	printf '%s' ':rosetta:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/run/rosetta/rosetta:OCF' > /proc/sys/fs/binfmt_misc/register 2>/dev/null || log "rosetta binfmt not registered"
+fi
+
+log "shares mounted"
+tz=$(jq -r '.tz // empty' /run/docatz/cfg.json)
+[ -n "$tz" ] && echo "$tz" > /etc/timezone
+
+sysctl -q -w fs.inotify.max_user_watches=1048576 fs.inotify.max_user_instances=8192 vm.max_map_count=262144 net.ipv4.ip_forward=1 2>/dev/null
+ulimit -n 1048576
+
+log "starting the agent"
+exec /usr/bin/docatz-agent

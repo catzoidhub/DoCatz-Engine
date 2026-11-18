@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vmm:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build docatz-vmm (arm64 and x86_64, ad hoc signed)
+        run: |
+          sh vmm/build.sh arm64
+          sh vmm/build.sh x86_64
+          out/docatz-vmm-arm64 version
+          codesign -d --entitlements - out/docatz-vmm-x86_64
+
+  agent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Vet and build
+        working-directory: agent
+        run: |
+          go vet ./...
+          GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null .
+          GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null .
+
+  guest:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      # The runner's own arch: Alpine's package scripts run natively in the build container.
+      - name: Build the guest
+        run: sh guest/build.sh ${{ matrix.arch }}
+      - name: Sizes
+        run: ls -la out/guest-${{ matrix.arch }}
