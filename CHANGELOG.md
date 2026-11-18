@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+- `host.docker.internal` works as on Standard: every container resolves it (default bridge and user-defined networks,
+  no `extra_hosts` needed) and a connection to it reaches a service on the Mac's **127.0.0.1** / ::1, such as a
+  database that listens only on loopback. The name (and `gateway.docker.internal`, `host.lima.internal`) is
+  `198.19.200.2`, which the guest sends to `docatz-vmm` over vsock port 2378; `host-gateway` is that address too. Before, the name existed only in the VM's `/etc/hosts` and `host-gateway` was the NAT
+  gateway, where loopback-only services cannot be reached. Capabilities `host-loopback`, `host-dns`.
 - `docatz.selftest` on the kernel command line: the agent checks the engine by itself (dockerd, a pulled container
-  on the default runtime, an OOM kill reported) and powers off. `scripts/qemu-selftest.sh` boots a guest under QEMU
+  on the default runtime, `host.docker.internal` resolved on two networks, an OOM kill reported) and powers off. `scripts/qemu-selftest.sh` boots a guest under QEMU
   with it; CI does so for the arm64 and x86_64 guests on every build.
 
 ## 0.1.4

@@ -64,7 +64,8 @@ kernel command line the guest expects; DoCatz passes it unchanged).
 
 `guest.json` also lists `capabilities` (`docker`, `ports-tcp`, `ports-udp`, `ports-loopback`, `fsevents`, `trim`,
 `rosetta`, `restart-on-panic`, `data-dir`, `shared-mounts` — `/` is a shared mount from boot, so `-v …:rshared` works, `shim-rs` — containers run under
-containerd's Rust shim by default (runtime `runc-rs`; `--runtime runc` picks dockerd's Go shim), …). New guest features are **added to this list** and never raise `protocol`:
+containerd's Rust shim by default (runtime `runc-rs`; `--runtime runc` picks dockerd's Go shim), `host-loopback` and
+`host-dns` — §7 "The Mac from inside", …). New guest features are **added to this list** and never raise `protocol`:
 DoCatz asks for a capability before using it and ignores the ones it does not know, so an older DoCatz accepts a newer
 guest.
 
@@ -207,9 +208,21 @@ On `run`'s stdout and on subscribed connections:
 - **Container IPs**: the guest has a NAT network (Virtualization.framework's), so the Mac reaches the guest at its
   address; DoCatz's router (`docatz-router` container) works as on Standard.
 - **Mounts**: `shares` over virtiofs at the same paths; file events through `fsevents` above.
-- **DNS / internet**: the NAT's DNS. In the VM `host.docker.internal` is the NAT gateway (the Mac), and dockerd's
-  `host-gateway` is that address too (as Standard sets it), so `extra_hosts: host.docker.internal:host-gateway`
-  reaches the Mac from a container — as on Standard, a container without that line does not resolve the name.
+- **DNS / internet**: the NAT's DNS for the VM itself.
+- **The Mac from inside** (capability `host-loopback`): `198.19.200.2` in the guest is the **Mac's loopback**. Every TCP
+  connection to it, from any container or network, reaches the Mac's `127.0.0.1:<same port>` (else `[::1]`): the guest
+  DNATs it to `docatz-agent`, which calls `docatz-vmm` on the host's vsock port **2378** with `tcp <port>\n`; `docatz-vmm`
+  answers one byte (`1` joined, `0` nothing listens — the container then gets a reset, as from a closed port) and joins
+  the streams. So a container reaches a database or dev server that listens only on the Mac's 127.0.0.1 (DevCatz's).
+  TCP only; the Mac's other addresses (LAN, the NAT's `192.168.64.1`) stay reachable through the NAT as before.
+- **Names** (capability `host-dns`): dockerd's DNS is `198.19.200.3` (daemon.json `dns`), served by the agent: it
+  answers `host.docker.internal`, `gateway.docker.internal`, `host.lima.internal`, `host.docatz.internal`,
+  `docker.for.mac.host.internal` and `docker.for.mac.localhost` with `198.19.200.2` (A; other types empty) and passes
+  everything else to the VM's nameservers. The default bridge uses it directly, a user-defined network through Docker's
+  embedded DNS, so **every container resolves the name with no `extra_hosts`**. dockerd's `host-gateway-ip` is
+  `198.19.200.2` too, so `extra_hosts: host.docker.internal:host-gateway` gives the same address (dockerd 28.3 writes
+  it as `::ffff:198.19.200.2` in the container's `/etc/hosts`, whichever daemon.json key sets it; it connects the same). The
+  VM's `/etc/hosts` has the same names.
 
 ## 8. Versions and upgrades
 

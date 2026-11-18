@@ -4,6 +4,7 @@
 //   - starts dockerd and keeps it running;
 //   - joins vsock port 2375 to /var/run/docker.sock (the Mac's Docker socket);
 //   - on vsock port 2376 reads "tcp <port>\n" and joins the stream to that port in the guest (published ports);
+//   - answers DNS for host.docker.internal and joins connections to it to the Mac's loopback (hostnet.go);
 //   - calls docatz-vmm on the host's vsock port 2377 (and again whenever that connection drops) and talks JSON lines
 //     on it: events (hello, docker ready, the listening ports) out, operations (time, shutdown, fsevents, trim, sync) in;
 //   - reaps orphaned processes, as PID 1 must.
@@ -54,6 +55,8 @@ func main() {
 	c := &control{docker: d}
 	go serve(portDocker, func(conn net.Conn) { joinUnix(conn, dockerSock) })
 	go serve(portForward, forward)
+	go serveHostLoop()
+	go serveDNS()
 	go c.dialHost()
 	go c.watchPorts()
 	if selftestWanted() {

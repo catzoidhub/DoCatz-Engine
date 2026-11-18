@@ -46,7 +46,7 @@ mount --bind /mnt/data/containerd /var/lib/containerd
 echo 1 > /mnt/data/layout
 
 log "data disk ready"
-# Network: the Mac's NAT. dockerd's host-gateway and host.docker.internal are the gateway (the Mac).
+# Network: the Mac's NAT.
 ip link set lo up
 ip link set eth0 up
 # The last lease, kept on the data disk for this MAC: configured now, DHCP confirms it in the background (it costs about
@@ -63,10 +63,20 @@ else
 	udhcpc -i eth0 -b -t 40 -T 1 -A 1 -s /usr/share/docatz/udhcpc.script >/dev/null 2>&1
 fi
 gw=$(ip route | awk '/^default/ { print $3; exit }')
-if [ -n "$gw" ]; then
-	echo "$gw host.docker.internal" >> /etc/hosts
-	jq --arg gw "$gw" '. + {"host-gateway-ip": $gw}' /etc/docker/daemon.json > /run/docatz/daemon.json && cat /run/docatz/daemon.json > /etc/docker/daemon.json
-fi
+# The Mac from inside (docs/CONTRACT.md): 198.19.200.2 is the Mac's loopback (every TCP port, through the agent and
+# docatz-vmm), 198.19.200.3 the DNS that names it host.docker.internal for every container. Both live on lo; the DNAT
+# is first in PREROUTING / OUTPUT, ahead of the rules dockerd appends for published ports.
+ip addr add 198.19.200.2/32 dev lo
+ip addr add 198.19.200.3/32 dev lo
+for chain in PREROUTING OUTPUT; do
+	iptables -t nat -I "$chain" 1 -d 198.19.200.2/32 -p tcp -j DNAT --to-destination 198.19.200.2:2378 ||
+		log "the host loopback rule ($chain) did not load"
+done
+for n in host.docker.internal gateway.docker.internal host.lima.internal host.docatz.internal; do
+	echo "198.19.200.2 $n" >> /etc/hosts
+done
+jq '. + {"host-gateway-ip": "198.19.200.2", "dns": ["198.19.200.3"]}' /etc/docker/daemon.json > /run/docatz/daemon.json &&
+	cat /run/docatz/daemon.json > /etc/docker/daemon.json
 
 log "network ready (gateway $gw)"
 # The Mac's folders, at the same paths.

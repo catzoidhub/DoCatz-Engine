@@ -208,3 +208,29 @@ func acceptLoop(_ fd: Int32, _ handle: @escaping (Int32) -> Void) {
         }
     }
 }
+
+/// A TCP connection to this Mac's loopback (127.0.0.1 or ::1), or nil when nothing listens there.
+func connectLoopback(port: UInt16, v6: Bool) -> Int32? {
+    let fd = socket(v6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)
+    if fd < 0 { return nil }
+    var on: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    var r: Int32
+    if v6 {
+        var a = sockaddr_in6()
+        a.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        a.sin6_family = sa_family_t(AF_INET6)
+        a.sin6_port = port.bigEndian
+        a.sin6_addr = in6addr_loopback
+        r = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
+    } else {
+        var a = sockaddr_in()
+        a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        a.sin_family = sa_family_t(AF_INET)
+        a.sin_port = port.bigEndian
+        a.sin_addr.s_addr = inet_addr("127.0.0.1")
+        r = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+    }
+    if r != 0 { close(fd); return nil }
+    return fd
+}

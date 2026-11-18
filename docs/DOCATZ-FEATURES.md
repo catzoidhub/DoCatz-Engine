@@ -15,7 +15,7 @@ This list is what DoCatz does with its engine and how Lite provides it. Status: 
 | Router reaching container IPs | the router container on the VM's host network | standard Docker bridge networking in the guest | ✅ |
 | Bind mounts of project folders | `~` and `/tmp/docatz` at the same paths | virtiofs shares at the same paths (`shares`) | ✅ |
 | Hot reload | inotify events for files changed on the Mac | `fsevents` (touch -c -m with the Mac's mtime) | ✅ |
-| `extra_hosts: …:host-gateway`, `host.docker.internal` (Sail, Postal…) | host-gateway = an address that reaches the Mac | `host-gateway-ip` = the NAT gateway | ✅ |
+| `host.docker.internal` from any container, `extra_hosts: …:host-gateway` (Sail, Postal, DevCatz's databases on the Mac's 127.0.0.1) | the name resolves in every network and reaches the Mac's loopback | `198.19.200.2` = the Mac's 127.0.0.1 / ::1 through the agent and vsock 2378; the agent's DNS (`198.19.200.3`) names it; `host-gateway-ip` the same (CONTRACT §7) | ✅ |
 | amd64 images on Apple silicon | Rosetta | VZ Rosetta share + binfmt | ✅ |
 | Engine settings: CPUs, memory | set at start | `cpus`, `memoryMiB` | ✅ |
 | Engine settings: disk size | grow the disk | `disk --size-gib` grows the file, the guest grows ext4 at boot (16 → 32 GB, data kept) | ✅ |

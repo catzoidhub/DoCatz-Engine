@@ -6,6 +6,8 @@ enum GuestPort {
     static let docker: UInt32 = 2375
     static let forward: UInt32 = 2376
     static let control: UInt32 = 2377
+    /// The agent calls in here for a container's connection to the Mac's loopback ("tcp <port>\n", answered 1 / 0).
+    static let hostLoop: UInt32 = 2378
 }
 
 /// One VM: built from the config, started, its Docker socket / ports / control socket served, stopped cleanly.
@@ -188,6 +190,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         let listener = VZVirtioSocketListener()
         listener.delegate = self
         socketDevice?.setSocketListener(listener, forPort: GuestPort.control)
+        socketDevice?.setSocketListener(listener, forPort: GuestPort.hostLoop)
         socketListener = listener
         let boot = { [self] in
             vm.start { [self] result in
@@ -295,6 +298,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         guard fd >= 0 else { return false }
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        if connection.destinationPort == GuestPort.hostLoop {
+            Thread.detachNewThread { serveHostLoop(fd) }
+            return true
+        }
         lock.lock()
         let old = agentFd
         lock.unlock()
@@ -801,4 +808,24 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         unlink(config.controlSocket)
         exit(1)
     }
+}
+
+/// A container's connection to host.docker.internal (198.19.200.2 in the guest): "tcp <port>\n" from the agent, joined to
+/// this Mac's 127.0.0.1:<port>, else [::1]:<port>. One byte answers first: 1 joined, 0 nothing listens (the agent then
+/// resets the container's connection, as a closed port would).
+func serveHostLoop(_ g: Int32) {
+    var head = [UInt8]()
+    var b: UInt8 = 0
+    while head.count < 16, read(g, &b, 1) == 1, b != 0x0a { head.append(b) }
+    let f = String(decoding: head, as: UTF8.self).split(separator: " ")
+    guard f.count == 2, f[0] == "tcp", let port = UInt16(f[1]), port > 0,
+          let c = connectLoopback(port: port, v6: false) ?? connectLoopback(port: port, v6: true) else {
+        var no: UInt8 = 0
+        _ = write(g, &no, 1)
+        close(g)
+        return
+    }
+    var yes: UInt8 = 1
+    guard write(g, &yes, 1) == 1 else { close(g); close(c); return }
+    join(c, g)
 }

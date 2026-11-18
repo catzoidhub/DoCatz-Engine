@@ -99,6 +99,25 @@ func selftest(d *docker) {
 	if !bytes.Contains(logs, []byte("selftest-ok")) {
 		report("FAIL output: %q", lastLine(logs))
 	}
+	// host.docker.internal: the Mac's loopback address from the default bridge and from a user-defined network (whose
+	// embedded DNS asks ours). Only the name is checked here: the connection itself needs docatz-vmm on the other end.
+	call("POST", "/networks/create", map[string]any{"Name": "docatz-selftest"})
+	for _, network := range []string{"bridge", "docatz-selftest"} {
+		b, code, err := call("POST", "/containers/create", map[string]any{
+			"Image": "busybox:1.37", "Tty": true, "Cmd": []string{"nslookup", "host.docker.internal"},
+			"HostConfig": map[string]any{"NetworkMode": network},
+		})
+		var c struct{ Id string }
+		if err != nil || code != 201 || json.Unmarshal(b, &c) != nil {
+			report("FAIL create dns (%s): %v %d %s", network, err, code, lastLine(b))
+		}
+		call("POST", "/containers/"+c.Id+"/start", nil)
+		call("POST", "/containers/"+c.Id+"/wait", nil)
+		out, _, _ := call("GET", "/containers/"+c.Id+"/logs?stdout=1&stderr=1", nil)
+		if !bytes.Contains(out, []byte(hostIP)) {
+			report("FAIL dns (%s): host.docker.internal is not %s: %q", network, hostIP, strings.TrimSpace(string(out)))
+		}
+	}
 	// OOM: a 16 MB container that keeps allocating must be reported as OOM-killed (the shim's cgroup v2 watch).
 	b, code, err = call("POST", "/containers/create", map[string]any{
 		"Image": "busybox:1.37", "Cmd": []string{"sh", "-c", "x=a; while :; do x=$x$x; done"},
@@ -116,7 +135,7 @@ func selftest(d *docker) {
 	if !oomState.State.OOMKilled {
 		report("FAIL oom: OOMKilled false, exit %d", oomState.State.ExitCode)
 	}
-	report("PASS %s oom-reported=true docker=%s kernel=%s default-runtime=%s container-runtime=%s output=%q",
+	report("PASS %s oom-reported=true host-dns=true docker=%s kernel=%s default-runtime=%s container-runtime=%s output=%q",
 		info.Architecture, info.ServerVersion, info.KernelVersion, info.DefaultRuntime, inspect.HostConfig.Runtime, strings.TrimSpace(string(logs)))
 }
 
