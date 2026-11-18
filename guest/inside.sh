@@ -52,7 +52,7 @@ cp /bin/busybox.static "$I/bin/busybox"
 cp "$SRC/guest/initramfs/init" "$I/init"
 chmod 0755 "$I/init" "$I/bin/busybox"
 : > "$I/modules.list"
-modprobe -d "$W/kernel" -S "$KVER" -a --show-depends virtio_pci virtio_blk ext4 overlay 2>/dev/null \
+modprobe -d "$W/kernel" -S "$KVER" -a --show-depends virtio_pci virtio_blk ext4 overlay virtio_rng 2>/dev/null \
 	| awk '$1 == "insmod" { print $2 }' | awk '!seen[$0]++' | while read -r ko; do
 	name=$(basename "$ko" | sed 's/\.ko.*$//')
 	case "$ko" in

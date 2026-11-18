@@ -30,6 +30,9 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private var stopping = false
     /// `sleep`: the guest is being stopped, or is stopped, while this process keeps the sockets; a connection boots it.
     private var sleeping = false
+    /// dockerd's answers kept for while the guest sleeps (AsleepAnswers), and how many requests they spared a wake.
+    private var asleepAnswers: AsleepAnswers?
+    private var asleepServed = 0
 
     private var agentFd: Int32 = -1
     private var agentSeq = 0
@@ -43,6 +46,9 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     /// Host-side ends of the Docker socket and port connections now open: closed when the guest goes away, so no client
     /// waits forever on a guest that rebooted.
     private var active = Set<Int32>()
+    /// How many of them are Docker socket connections (the rest are published ports), and when one last opened or closed.
+    private var dockerActive = Set<Int32>()
+    private var lastConnection = Date()
 
     init(config: Config) {
         self.config = config
@@ -368,6 +374,25 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     // ------------------------------------------------------------------ Docker socket and ports
 
     private func serveDocker(_ c: Int32) {
+        // Asleep: a ping, version, info or container list is answered here; anything else wakes the guest and goes
+        // through with the bytes already read.
+        lock.lock()
+        let answers = sleeping && (state == "sleeping" || state == "stopping") ? asleepAnswers : nil
+        lock.unlock()
+        var pending = Data()
+        if let answers {
+            guard let (head, rest) = readRequestHead(c) else { close(c); return }
+            if let reply = answers.answer(head) {
+                writeAll(c, reply)
+                close(c)
+                lock.lock()
+                asleepServed += 1
+                lock.unlock()
+                return
+            }
+            pending = rest
+            Out.log("asleep: waking for \(head.split(separator: "\r\n").first.map(String.init) ?? "?")")
+        }
         wake()
         // Before dockerd is ready a connection waits (up to 60 s) rather than failing.
         for _ in 0..<600 {
@@ -379,17 +404,22 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
             usleep(100_000)
         }
         guard let g = vsock(GuestPort.docker) else { close(c); return }
-        track(c, g)
+        if !pending.isEmpty, !writeAll(g, pending) { close(c); close(g); return }
+        track(c, g, docker: true)
     }
 
-    private func track(_ c: Int32, _ g: Int32) {
+    private func track(_ c: Int32, _ g: Int32, docker: Bool = false) {
         lock.lock()
         active.insert(c)
+        if docker { dockerActive.insert(c) }
+        lastConnection = Date()
         lock.unlock()
         join(c, g) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             self.active.remove(c)
+            self.dockerActive.remove(c)
+            self.lastConnection = Date()
             self.lock.unlock()
         }
     }
@@ -499,6 +529,8 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         return [
             "state": state, "version": VERSION, "protocol": PROTOCOL, "pid": Int(getpid()), "guest": guest,
             "memory": ["configuredMiB": config.memoryMiB, "targetMiB": targetMiB],
+            "asleep": ["answers": asleepAnswers != nil, "answered": asleepServed],
+            "connections": ["docker": dockerActive.count, "ports": active.count - dockerActive.count, "quietSec": Int(Date().timeIntervalSince(lastConnection))],
             "ports": forwards.keys.sorted().map { ["proto": $0 >= 65536 ? "udp" : "tcp", "port": $0 % 65536] },
         ]
     }
@@ -520,7 +552,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
                 answer(["stopping": true])
                 stop(timeout: params["timeoutSec"] as? Double ?? 20)
             case "sleep":
-                if let e = sleep(timeout: params["timeoutSec"] as? Double ?? 20) { refuse(e) } else { answer(["sleeping": true]) }
+                if let e = sleep(timeout: params["timeoutSec"] as? Double ?? 20, maxConnections: params["maxConnections"] as? Int) { refuse(e) } else { answer(["sleeping": true]) }
             case "wake":
                 wake()
                 answer(["waking": true])
@@ -570,19 +602,31 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     /// Idle sleep: the guest stops cleanly (dockerd first) and its memory goes back to the Mac; this process stays with
     /// the Docker socket, and the first connection to it boots the guest again (`wake`). Cold boot, not a saved state:
     /// a restored VM comes back with all of its configured memory resident (measured, macOS 26).
-    func sleep(timeout: Double) -> String? {
+    func sleep(timeout: Double, maxConnections: Int? = nil) -> String? {
         lock.lock()
         guard state == "running", !stopping, !sleeping else {
             let now = state
             lock.unlock()
             return "the VM is \(now), not running"
         }
+        // Checked under the same lock that marks it sleeping: a build that connects now is not cut off.
+        if let max = maxConnections, dockerActive.count > max {
+            let n = dockerActive.count
+            lock.unlock()
+            return "in use: \(n) Docker connections open"
+        }
         sleeping = true
         state = "stopping"
         lock.unlock()
         emit(["event": "state", "state": "stopping", "sleep": true])
         Thread.detachNewThread { [self] in
+            let answers = AsleepAnswers.take { self.vsock(GuestPort.docker) }
+            lock.lock()
+            asleepAnswers = answers.isEmpty ? nil : answers
+            asleepServed = 0
+            lock.unlock()
             _ = agent(["op": "shutdown"], timeout: timeout)
+            closeConnections()
             // guestDidStop → asleep(). A guest that does not power off in time is ended.
             Thread.sleep(forTimeInterval: timeout)
             lock.lock()
@@ -621,10 +665,21 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         sleeping = false
         state = "starting"
         started = Date()
+        asleepAnswers = nil
+        let spared = asleepServed
         lock.unlock()
-        Out.log("waking")
+        Out.log("waking (\(spared) requests answered while asleep)")
         emit(["event": "state", "state": "starting", "wake": true])
         queue.async { [self] in createAndBoot(restoreFrom: nil) }
+    }
+
+    /// dockerd finishes its shutdown only once its clients are gone (an open `docker events` held it for 15 s): the
+    /// host ends of the Docker and port connections are closed as soon as the guest was told to stop.
+    private func closeConnections() {
+        lock.lock()
+        let open = active
+        lock.unlock()
+        for fd in open { shutdown(fd, SHUT_RDWR) }
     }
 
     func stop(timeout: Double) {
@@ -643,6 +698,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
                     if vm.canRequestStop { try? vm.requestStop() }
                 }
             }
+            closeConnections()
             Thread.sleep(forTimeInterval: timeout)
             kill()
         }

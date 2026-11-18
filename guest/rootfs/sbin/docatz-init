@@ -14,7 +14,7 @@ mount -t cgroup2 cgroup2 /sys/fs/cgroup
 mkdir -p /run/docatz
 hostname docatz
 
-for m in vmw_vsock_virtio_transport virtio_net virtio_balloon virtio_console virtiofs fuse binfmt_misc \
+for m in virtio_rng vmw_vsock_virtio_transport virtio_net virtio_balloon virtio_console virtiofs fuse binfmt_misc \
 	overlay bridge br_netfilter veth tun ip_tables ip6_tables iptable_nat iptable_filter ip6table_nat ip6table_filter \
 	nf_nat nf_conntrack xt_MASQUERADE xt_addrtype xt_conntrack nft_chain_nat nft_compat; do
 	modprobe -q "$m" 2>/dev/null
@@ -47,7 +47,19 @@ log "data disk ready"
 # Network: the Mac's NAT. dockerd's host-gateway and host.docker.internal are the gateway (the Mac).
 ip link set lo up
 ip link set eth0 up
-udhcpc -i eth0 -b -t 40 -T 1 -A 1 -s /usr/share/udhcpc/default.script >/dev/null 2>&1
+# The last lease, kept on the data disk for this MAC: configured now, DHCP confirms it in the background (it costs about
+# a second at every boot otherwise). A first boot, or another MAC, waits for DHCP as before.
+lease=/mnt/data/net/lease
+if [ -f "$lease" ] && [ "$(sed -n 's/^mac=//p' "$lease")" = "$(cat /sys/class/net/eth0/address)" ]; then
+	l_ip=$(sed -n 's/^ip=//p' "$lease"); l_mask=$(sed -n 's/^mask=//p' "$lease"); l_gw=$(sed -n 's/^router=//p' "$lease"); l_dns=$(sed -n 's/^dns=//p' "$lease")
+	ip addr add "$l_ip/${l_mask:-24}" dev eth0
+	ip route add default via "$l_gw" dev eth0
+	: > /etc/resolv.conf
+	for d in $l_dns; do echo "nameserver $d" >> /etc/resolv.conf; done
+	DOCATZ_CACHED=1 udhcpc -i eth0 -f -t 40 -T 1 -A 5 -s /usr/share/docatz/udhcpc.script >/dev/null 2>&1 &
+else
+	udhcpc -i eth0 -b -t 40 -T 1 -A 1 -s /usr/share/docatz/udhcpc.script >/dev/null 2>&1
+fi
 gw=$(ip route | awk '/^default/ { print $3; exit }')
 if [ -n "$gw" ]; then
 	echo "$gw host.docker.internal" >> /etc/hosts

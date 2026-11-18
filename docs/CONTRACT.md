@@ -139,7 +139,8 @@ answers echo it; events have no `id`. Never TCP.
 ```
 → {"id":1,"method":"status"}
 ← {"id":1,"result":{"state":"running","version":"0.1.0","pid":4242,"guest":{"agent":"0.1.0","docker":true,"bootMs":1830},
-                    "memory":{"configuredMiB":4096,"targetMiB":4096},"ports":[{"proto":"tcp","port":8080}]}}
+                    "memory":{"configuredMiB":4096,"targetMiB":4096},"ports":[{"proto":"tcp","port":8080}],
+                    "connections":{"docker":1,"ports":0,"quietSec":42}}}
 ← {"id":2,"error":"unknown method"}
 ```
 
@@ -147,7 +148,7 @@ answers echo it; events have no `id`. Never TCP.
 | --- | --- | --- |
 | `status` | — | as above; `state` is `starting`, `running`, `stopping`, `sleeping`, `stopped` or `error` |
 | `stop` | `{"timeoutSec":20}` | asks the guest to stop (dockerd stops its containers, file systems are synced), then ends the VM after the timeout; the process exits when it is stopped |
-| `sleep` | `{"timeoutSec":20}` | idle sleep: the guest stops cleanly (as `stop`) and its memory goes back to the Mac, but the process stays (about 12 MB) with the Docker socket; `state` becomes `sleeping`. The **first connection to the Docker socket** (or `wake`) boots it again, about 2 s; containers with a restart policy come back. Refused unless `running`. DoCatz decides when (nothing running, nobody using it) and must not touch the socket itself while it wants the VM asleep. Published ports are not listened on while asleep |
+| `sleep` | `{"timeoutSec":20,"maxConnections":1}` | idle sleep: the guest stops cleanly (as `stop`) and its memory goes back to the Mac, but the process stays (about 12 MB) with the Docker socket; `state` becomes `sleeping`. The **first connection to the Docker socket** that needs dockerd (or `wake`) boots it again, about 1.1 s (§7: some read-only calls are answered without waking); containers with a restart policy come back. Refused unless `running`, and — with `maxConnections` — when more Docker connections than that are open (`"in use: …"`; checked atomically, so a `docker build` that has just connected is never cut off; DoCatz passes the number of connections it holds itself, e.g. 1 for its events stream). `status`' `connections` gives the open Docker / port connections and `quietSec`, the seconds since one last opened or closed. DoCatz decides when (nothing running, nobody using it) and must not touch the socket itself while it wants the VM asleep. Published ports are not listened on while asleep |
 | `wake` | — | boots a sleeping guest; nothing otherwise |
 | `kill` | — | ends the VM at once (last resort; the data disk may need its journal replayed) |
 | `ports` | — | the forwarded ports |
@@ -182,6 +183,12 @@ On `run`'s stdout and on subscribed connections:
 - **Docker socket**: `dockerSocket` on the Mac (made by the helper, 0600; a stale file is replaced). Every
   connection goes over vsock to the agent, which joins it to `/var/run/docker.sock` in the guest. The socket exists
   from `starting` on; connections made before dockerd is ready wait for it (up to 60 s).
+- **While asleep** (`sleep`), docatz-vmm answers these on the Docker socket itself with dockerd's own answers taken
+  just before the guest stopped, so pollers and a terminal do not boot the VM: `GET`/`HEAD /_ping`, `GET /version`,
+  `GET /info`, and `GET /containers/json` (plain or `all=1`) — the list only when every container running at sleep has
+  an `always` / `unless-stopped` restart policy (they are back on wake, so the list stays true). With any other query
+  (filters…) or any other request, the guest wakes and the request goes through unchanged. `status` →
+  `asleep: {answers, answered}`.
 - **Ports**: every TCP port the guest listens on for all addresses (`0.0.0.0` / `::`, which is what `docker run -p`
   makes) **or on the VM's loopback** (`127.0.0.1` / `::1`, as Lima forwards them: DoCatz's `docatz-router` runs on the
   VM's host network on 127.0.0.1) is listened on at `127.0.0.1` and `::1` on the Mac, and each connection goes over

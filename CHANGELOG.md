@@ -13,6 +13,12 @@ First release, for DoCatz's Lite engine (beta) on macOS.
 
 ## Unreleased
 
+- Boots to a ready Docker in about 1 s (was 2 s; a first boot 0.9 s, was 6 s): virtio-rng is loaded in the initramfs —
+  without it the kernel's random pool waited about a second, and mkfs, jq and dockerd with it — and the last DHCP lease
+  is configured at once, confirmed in the background.
+- While asleep, `docker version`, `docker info`, `docker ps` (when the running containers come back on wake) and pings
+  are answered without waking the VM; anything else wakes it (`docker run` from sleep: 1.3 s).
+- `status` reports open connections; `sleep` takes `maxConnections` and refuses while the engine is in use.
 - UDP ports are forwarded (127.0.0.1 and ::1), a stream per client.
 - `sleep` / `wake`: the guest stops and gives its memory back while docatz-vmm keeps the Docker socket (about 12 MB);
   the first Docker connection boots it again in about 2 s.

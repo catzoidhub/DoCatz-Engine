@@ -1,0 +1,16 @@
+#!/bin/sh
+# udhcpc's script in the DoCatz guest: Alpine's own, plus the lease kept on the data disk so the next boot configures the
+# network at once (docatz-init) instead of waiting about a second for DHCP. While the address docatz-init set from that
+# lease is still the one DHCP gives, nothing is flushed or set again.
+LEASE=/mnt/data/net/lease
+mac=$(cat /sys/class/net/$interface/address 2>/dev/null)
+cached=$(sed -n 's/^ip=//p' "$LEASE" 2>/dev/null)
+case "$1" in
+	deconfig)
+		[ -n "$DOCATZ_CACHED" ] && exit 0 ;;
+	bound|renew)
+		mkdir -p /mnt/data/net
+		printf 'mac=%s\nip=%s\nmask=%s\nrouter=%s\ndns=%s\n' "$mac" "$ip" "${mask:-24}" "${router%% *}" "$dns" > "$LEASE.tmp" && mv "$LEASE.tmp" "$LEASE"
+		[ -n "$DOCATZ_CACHED" ] && [ "$ip" = "$cached" ] && exit 0 ;;
+esac
+exec /usr/share/udhcpc/default.script "$@"

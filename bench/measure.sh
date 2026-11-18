@@ -5,7 +5,7 @@
 #   10 running   memory with 10 nginx:alpine containers up for 30 s
 # Memory is phys_footprint (what Activity Monitor shows as Memory) summed over the engine's VM process and helpers.
 #
-#   bench/measure.sh [engine…]       engines: lite standard orbstack colima docker-desktop (default: those installed)
+#   bench/measure.sh [engine…]       engines: lite standard orbstack colima docker-desktop kiri (default: those installed)
 #
 # Results go to out/bench/<date>.md. They are for internal use only: DoCatz's promotion shows its own numbers and never
 # a comparison with a named product (DoCatz TODO #106).
@@ -90,9 +90,27 @@ colima_helpers() { pgrep -f 'limactl hostagent.*colima'; }
 
 docker_desktop_installed() { [ -d /Applications/Docker.app ]; }
 docker_desktop_host() { echo "unix://$HOME/.docker/run/docker.sock"; }
-docker_desktop_start() { open -g -a Docker; }
-docker_desktop_stop() { osascript -e 'quit app "Docker"' >/dev/null 2>&1; sleep 10; }
+# Docker Desktop's own CLI: quitting the app with osascript ended its VM under the still-running backend, which then
+# showed "the Docker Desktop VM stopped unexpectedly" (2026-11-18).
+DDCLI=/Applications/Docker.app/Contents/Resources/bin/docker
+docker_desktop_start() { "$DDCLI" desktop start >/dev/null 2>&1 & }
+docker_desktop_stop() { "$DDCLI" desktop stop >/dev/null 2>&1; }
 docker_desktop_helpers() { pgrep -f 'com.docker.backend|com.docker.virtualization|com.docker.vmnetd'; }
+
+kiri_installed() { [ -d /Applications/Kiri.app ]; }
+kiri_host() { echo "unix://$HOME/.kiri/run/docker.sock"; }
+kiri_start() { open -g -a Kiri; }
+kiri_stop() {
+	osascript -e 'quit app "Kiri"' >/dev/null 2>&1
+	# its VM is the daemon's: wait for it to go (it sleeps after a minute idle, or ends with the daemon)
+	local v; for v in $(seq 1 90); do [ -z "$(kiri_vm)" ] && break; sleep 1; done
+	local i
+	for i in $(seq 1 50); do pgrep -f 'Kiri.app/Contents/MacOS/kiri' >/dev/null || break; sleep 0.2; done
+	pgrep -f 'Kiri.app/Contents/MacOS/kiri' >/dev/null && say "kiri: its daemon stays after Quit (a launch agent): the start below is not a cold one"
+}
+kiri_helpers() { pgrep -f 'Kiri.app/Contents/MacOS/kiri'; }
+# Kiri's VM: a Virtualization process started after the daemon (none while it sleeps).
+kiri_vm() { local d; d=$(pgrep -f 'kiri daemon' | head -1); [ -n "$d" ] || return; for p in $(vm_pids); do [ "$(ps -p $p -o etimes= | tr -d ' ')" -lt "$(ps -p $d -o etimes= | tr -d ' ')" ] && echo $p; done; }
 
 # ---------------------------------------------------------------- one engine
 
@@ -118,19 +136,23 @@ measure() {
 	pids="$vm $("${fn}_helpers" | tr '\n' ' ')"
 	say "$e: up in ${cold}s (VM pids: ${vm:-none found}); idle ${IDLE_WAIT}s"
 	sleep "$IDLE_WAIT"
+	# A VM that starts later (Kiri's daemon answers `docker info` before its VM runs) counts from where it appears.
+	vm=$(comm -13 <(echo "$before") <(vm_pids) | tr '\n' ' '); pids="$vm $("${fn}_helpers" | tr '\n' ' ')"
 	idle=$(footprint_mb $pids)
 	say "$e: idle ${idle} MB; starting 10 containers"
 	docker -H "$host" pull -q "$IMAGE" >/dev/null
 	for i in $(seq 1 10); do docker -H "$host" run -d --name "docatz-bench-$i" "$IMAGE" >/dev/null; done
 	sleep "$TEN_WAIT"
+	vm=$(comm -13 <(echo "$before") <(vm_pids) | tr '\n' ' '); pids="$vm $("${fn}_helpers" | tr '\n' ' ')"
 	ten=$(footprint_mb $pids)
+	say "$e: VM pids at 10 containers: ${vm:-none}"
 	say "$e: 10 containers ${ten} MB"
 	for i in $(seq 1 10); do docker -H "$host" rm -f "docatz-bench-$i" >/dev/null 2>&1; done
 	echo "| $e | ${cold} s | ${idle} MB | ${ten} MB |" >> "$REPORT"
 }
 
 engines=("$@")
-[ ${#engines[@]} -eq 0 ] && engines=(lite standard orbstack colima docker-desktop)
+[ ${#engines[@]} -eq 0 ] && engines=(lite standard orbstack colima docker-desktop kiri)
 {
 	echo "# Engine measurements, $(date '+%Y-%m-%d %H:%M')"
 	echo

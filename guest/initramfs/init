@@ -14,6 +14,8 @@ panic() {
 	poweroff -f
 }
 
+# virtio_rng among them: without it the kernel's random pool waited ~1 s for entropy, and every program that asks for
+# random bytes early (jq, dockerd) waited with it.
 while read -r m; do insmod "$m" 2>/dev/null; done < /modules.list
 
 i=0

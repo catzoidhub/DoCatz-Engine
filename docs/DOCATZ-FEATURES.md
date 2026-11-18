@@ -26,7 +26,7 @@ This list is what DoCatz does with its engine and how Lite provides it. Status: 
 | Image / volume export and import | the API (helper containers) | — (generic; the same save / load and tar pipes as Move) | ✅ |
 | `docker` CLI and the `docatz` context | a stable socket path | `~/.docatz/run/docker.sock` | ✅ |
 | Engine outlives the window, start at login (#107) | a process DoCatz's helper can own | `docatz-vmm run` as the helper's child; SIGTERM = clean stop | ✅ |
-| Idle sleep, fast wake (#106) | stop or pause when idle, wake on the socket | `sleep`: the guest stops, docatz-vmm keeps the socket (12 MB), the first Docker connection boots it in ~2 s. `save` / `restoreFrom` also works (wake 0.8 s) but brings all memory back resident | ✅ |
+| Idle sleep, fast wake (#106) | stop or pause when idle, wake on the socket | `sleep`: the guest stops, docatz-vmm keeps the socket (12 MB), the first Docker call that needs dockerd boots it (`docker run` from sleep: 1.3 s); ping, version, info and `docker ps` are answered asleep. `save` / `restoreFrom` also works (wake 0.8 s) but brings all memory back resident | ✅ |
 | Memory given back | unused guest memory returned to macOS | VZ's balloon does **not** return it (macOS 26.5, measured) and a restore makes it worse; only a stopped guest gives it back → `sleep` | ✅ |
 | Clock after the Mac sleeps | guest time follows | `sync-time`, automatic on wake | ✅ |
 | A guest kernel crash | the engine comes back by itself | guest reboots in place; open connections end; `restart` event | ✅ |
