@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
 - The guest's `/` is a shared mount from boot (as under systemd): `-v …:…:rshared` binds (k3s in a container) work
   with nothing done by DoCatz; capability `shared-mounts`.
