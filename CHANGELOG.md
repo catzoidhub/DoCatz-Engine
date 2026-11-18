@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
 - `host.docker.internal` works as on Standard: every container resolves it (default bridge and user-defined networks,
   no `extra_hosts` needed) and a connection to it reaches a service on the Mac's **127.0.0.1** / ::1, such as a
