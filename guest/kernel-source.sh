@@ -24,8 +24,8 @@ cat > "$D/README.md" <<MD
 # Corresponding source of the DoCatz Engine guest kernel
 
 - \`linux-$KVER.tar.xz\`: the Linux kernel $KVER from kernel.org, unchanged.
-- \`alpine/\`: Alpine Linux's recipe that builds it as \`linux-virt\` ($KREL): \`APKBUILD\`, \`config-virt.aarch64\`,
-  \`config-virt.x86_64\` and Alpine's patches, from aports \`$REF\` (main/linux-lts).
+- \`alpine/\`: Alpine Linux's recipe that builds it as \`linux-virt\` ($KREL): \`APKBUILD\`, \`virt.aarch64.config\`,
+  \`virt.x86_64.config\` and Alpine's patches, from aports \`$REF\` (main/linux-lts).
 - DoCatz Engine applies no patches of its own and uses Alpine's binary package unchanged.
 
 The kernel is licensed GPL-2.0-only; see COPYING in the tarball.

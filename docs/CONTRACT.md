@@ -4,9 +4,10 @@ What DoCatz's Lite backend (`DoCatz/src/main/engine/`) can rely on. Anything not
 releases. Changes that break it raise `protocol` (below); DoCatz refuses a `docatz-vmm` / guest whose protocol it does
 not know.
 
-Status: **draft 1 (2026-11-18)**, built and booted on Apple silicon (macOS 26): Docker ready ~2.5 s after `run`,
-ports, shares, Rosetta, `fsevents`, `trim`, `stop` tested; not released yet (no v0.1.0 tag) — macOS only. Windows Lite stays on WSL2 and Linux Lite waits for the daemon of our
-own (DoCatz TODO #106, "Lite 2"); neither uses `docatz-vmm`.
+Status: **v0.1.0 (2026-11-18)**. Tested on Apple silicon (macOS 26): Docker ready ~1 s after `run`, TCP / UDP /
+loopback ports, shares, Rosetta, `fsevents`, `trim`, `sleep` / `wake`, `stop`, crash restart. Not yet tried on an Intel
+Mac or on macOS 13–15. macOS only: Windows Lite stays on WSL2 and Linux Lite waits for the daemon of our own (DoCatz
+TODO #106, "Lite 2"); neither uses `docatz-vmm`.
 
 ## 1. The pieces
 

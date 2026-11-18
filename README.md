@@ -5,11 +5,11 @@ Virtualization.framework, and the Linux guest it boots — Alpine's kernel, a re
 Engine, and `docatz-agent`. [DoCatz](https://github.com/catzoidhub/DoCatz) downloads both, pinned by SHA-256, when you
 pick Lite in Settings → Engine; you do not install anything from here yourself.
 
-- **Fast to wake** — a ready Docker about 2.5 s after the VM starts (Apple silicon), and the VM's state can be saved
-  and restored (macOS 14+).
+- **Fast to wake** — a ready Docker about 1 s after the VM starts (Apple silicon). Asleep it holds about 10 MB,
+  answers `docker ps` / `version` / `info` without waking, and wakes on anything else in about a second.
 - **Your folders at the same paths** — your home folder is shared over virtiofs and mounted at the same path in the
   VM, so `-v ~/site:/app` works as on your Mac, with file events for hot reload.
-- **Ports on localhost** — every port a container publishes is on `127.0.0.1` and `::1`.
+- **Ports on localhost** — every TCP and UDP port a container publishes is on `127.0.0.1` and `::1`.
 - **amd64 images on Apple silicon** through Rosetta.
 - **No SSH, no extra daemons** — the Docker socket, ports and control all go over vsock.
 
