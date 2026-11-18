@@ -6,8 +6,8 @@ package main
 //     to it onto the agent's listener at hostIP:portHostLoop; the agent reads the original port (SO_ORIGINAL_DST) and
 //     calls docatz-vmm on the host's vsock port 2378 with "tcp <port>\n", and docatz-vmm joins the stream to the Mac's
 //     127.0.0.1:<port> (then ::1). So a container reaches a database that listens only on the Mac's 127.0.0.1.
-//   - dnsIP (198.19.200.3):53 is dockerd's DNS (daemon.json "dns"): it answers host.docker.internal and its aliases
-//     with hostIP and passes every other question to the guest's own nameservers (/etc/resolv.conf, the Mac's NAT).
+//   - dnsIP (198.19.200.3):53 is dockerd's DNS (daemon.json "dns"): it answers host.docker.internal, its aliases and
+//     every <name>.localhost with hostIP and passes every other question to the guest's own nameservers (/etc/resolv.conf, the Mac's NAT).
 //     Docker's embedded DNS (127.0.0.11, user-defined networks) uses it as its upstream, so every network gets the name.
 
 import (
@@ -201,13 +201,34 @@ func dnsAnswer(q []byte, network string) []byte {
 	return servfail(q)
 }
 
-// localAnswer: A → hostIP, any other type → no data (so a resolver asking AAAA first falls back to the A record).
+// localAddrs: the addresses we answer for a name ourselves (A, AAAA), or ok=false to ask upstream.
+//   - the Mac's names (hostNames) and any <name>.localhost: A hostIP, no AAAA (so a client never tries ::1, which in a
+//     container is the container itself). <name>.localhost is 127.0.0.1 on the Mac, where the Catzoid proxies answer
+//     (DevCatz's https://rustfs.localhost, DoCatz's <name>.docatz.localhost); hostIP takes a container to the same place.
+//   - bare localhost: 127.0.0.1 / ::1 (RFC 6761), never asked upstream (the NAT's DNS refuses it).
+func localAddrs(name string) (a, aaaa net.IP, ok bool) {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	switch {
+	case name == "localhost":
+		return net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback, true
+	case hostNames[name] || strings.HasSuffix(name, ".localhost"):
+		return net.ParseIP(hostIP).To4(), nil, true
+	}
+	return nil, nil, false
+}
+
+// localAnswer: our own answer for the names localAddrs knows; a type we have no address for gets an empty answer
+// (NOERROR, no data), so a resolver asking AAAA first falls back to the A record.
 func localAnswer(q []byte) []byte {
 	if len(q) < 12 || binary.BigEndian.Uint16(q[4:6]) != 1 || q[2]&0x80 != 0 {
 		return nil
 	}
 	name, end, ok := readName(q, 12)
-	if !ok || end+4 > len(q) || !hostNames[strings.ToLower(name)] {
+	if !ok || end+4 > len(q) {
+		return nil
+	}
+	a, aaaa, ok := localAddrs(name)
+	if !ok {
 		return nil
 	}
 	qtype := binary.BigEndian.Uint16(q[end : end+2])
@@ -218,14 +239,22 @@ func localAnswer(q []byte) []byte {
 	binary.BigEndian.PutUint16(out[6:8], 0)   // answers
 	binary.BigEndian.PutUint16(out[8:10], 0)  // authority
 	binary.BigEndian.PutUint16(out[10:12], 0) // additional
-	if qtype == 1 && qclass == 1 {            // A IN
+	var ip net.IP
+	switch {
+	case qclass != 1:
+	case qtype == 1:
+		ip = a
+	case qtype == 28:
+		ip = aaaa
+	}
+	if ip != nil {
 		binary.BigEndian.PutUint16(out[6:8], 1)
 		out = append(out, 0xc0, 12) // the name: a pointer to the question
-		out = binary.BigEndian.AppendUint16(out, 1)
+		out = binary.BigEndian.AppendUint16(out, qtype)
 		out = binary.BigEndian.AppendUint16(out, 1)
 		out = binary.BigEndian.AppendUint32(out, 60)
-		out = binary.BigEndian.AppendUint16(out, 4)
-		out = append(out, net.ParseIP(hostIP).To4()...)
+		out = binary.BigEndian.AppendUint16(out, uint16(len(ip)))
+		out = append(out, ip...)
 	}
 	return out
 }

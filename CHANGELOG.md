@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `<name>.localhost` resolves in every container to the Mac's loopback (`198.19.200.2`, A only), so
+  `https://rustfs.localhost` (DevCatz) and `<name>.docatz.localhost` (DoCatz) reach the Catzoid proxies on the Mac's
+  :443, as from a browser on the Mac. Bare `localhost` is answered `127.0.0.1` / `::1` by the guest's DNS instead of
+  being sent upstream (where the NAT's DNS failed it, SERVFAIL). The self-test checks `rustfs.localhost` too.
+
 ## 0.1.5
 
 - `host.docker.internal` works as on Standard: every container resolves it (default bridge and user-defined networks,

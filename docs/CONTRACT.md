@@ -217,8 +217,12 @@ On `run`'s stdout and on subscribed connections:
   TCP only; the Mac's other addresses (LAN, the NAT's `192.168.64.1`) stay reachable through the NAT as before.
 - **Names** (capability `host-dns`): dockerd's DNS is `198.19.200.3` (daemon.json `dns`), served by the agent: it
   answers `host.docker.internal`, `gateway.docker.internal`, `host.lima.internal`, `host.docatz.internal`,
-  `docker.for.mac.host.internal` and `docker.for.mac.localhost` with `198.19.200.2` (A; other types empty) and passes
-  everything else to the VM's nameservers. The default bridge uses it directly, a user-defined network through Docker's
+  `docker.for.mac.host.internal`, `docker.for.mac.localhost` and **every `<name>.localhost`** with `198.19.200.2` (A;
+  other types empty, so no client tries `::1`, which in a container is the container itself), bare `localhost` with
+  `127.0.0.1` / `::1` (RFC 6761), and passes everything else to the VM's nameservers. `<name>.localhost` is the Mac's
+  127.0.0.1 on the Mac too, so a container reaches the same place a browser does: `https://rustfs.localhost`
+  (DevCatz's proxy) and `<name>.docatz.localhost` (DoCatz's) on the Mac's :443, through the host-loopback forward.
+  Trusting the Catzoid CA inside a container is the project's own setup. The default bridge uses it directly, a user-defined network through Docker's
   embedded DNS, so **every container resolves the name with no `extra_hosts`**. dockerd's `host-gateway-ip` is
   `198.19.200.2` too, so `extra_hosts: host.docker.internal:host-gateway` gives the same address (dockerd 28.3 writes
   it as `::ffff:198.19.200.2` in the container's `/etc/hosts`, whichever daemon.json key sets it; it connects the same). The
