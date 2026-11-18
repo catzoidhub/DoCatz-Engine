@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- `docatz-vmm` is signed with Developer ID (Mahryan Rakhmatullah, Q5Q5KKYWU7), with the hardened runtime and a
+  timestamp, instead of ad hoc. Nothing else changed.
+
 ## 0.1.2
 
 - The guest's `/` is a shared mount from boot (as under systemd): `-v …:…:rshared` binds (k3s in a container) work
