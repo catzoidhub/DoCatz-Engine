@@ -63,7 +63,7 @@ pin). `guest.json` inside the guest archive repeats `version`, `protocol` and `v
 kernel command line the guest expects; DoCatz passes it unchanged).
 
 `guest.json` also lists `capabilities` (`docker`, `ports-tcp`, `ports-udp`, `ports-loopback`, `fsevents`, `trim`,
-`rosetta`, `restart-on-panic`, `data-dir`, …). New guest features are **added to this list** and never raise `protocol`:
+`rosetta`, `restart-on-panic`, `data-dir`, `shared-mounts` — `/` is a shared mount from boot, so `-v …:rshared` works, …). New guest features are **added to this list** and never raise `protocol`:
 DoCatz asks for a capability before using it and ignores the ones it does not know, so an older DoCatz accepts a newer
 guest.
 

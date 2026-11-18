@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The guest's `/` is a shared mount from boot (as under systemd): `-v …:…:rshared` binds (k3s in a container) work
+  with nothing done by DoCatz; capability `shared-mounts`.
+
 ## 0.1.1
 
 - One docatz-vmm per VM: a second `run` on the same data disk exits 3 and names the running one (`vmm.lock`),

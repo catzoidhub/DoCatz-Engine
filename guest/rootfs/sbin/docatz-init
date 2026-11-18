@@ -11,6 +11,8 @@ mount -t tmpfs -o mode=1777 shm /dev/shm
 mount -t tmpfs -o mode=0755 tmpfs /run
 mount -t tmpfs -o mode=1777 tmpfs /tmp
 mount -t cgroup2 cgroup2 /sys/fs/cgroup
+# Mounts propagate, as under systemd: `-v …:…:rshared` (k3s, a cluster in a container) needs / to be a shared mount.
+mount --make-rshared /
 mkdir -p /run/docatz
 hostname docatz
 
