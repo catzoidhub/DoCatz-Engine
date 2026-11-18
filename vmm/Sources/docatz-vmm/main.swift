@@ -35,7 +35,9 @@ case "version":
     #endif
     let v = ProcessInfo.processInfo.operatingSystemVersion
     var saveRestore = false
-    if #available(macOS 14.0, *) { saveRestore = true }
+    #if arch(arm64)
+    if #available(macOS 14.0, *) { saveRestore = true } // Apple silicon only
+    #endif
     print(encode(["version": VERSION, "protocol": PROTOCOL, "arch": arch, "macos": "\(v.majorVersion).\(v.minorVersion)", "rosetta": rosettaAvailable(), "saveRestore": saveRestore])!)
 
 case "disk":

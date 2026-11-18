@@ -69,7 +69,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         boot.initialRamdiskURL = URL(fileURLWithPath: config.initrd)
         boot.commandLine = config.guestCmdline(shareTags: tags, rosetta: rosetta)
         c.bootLoader = boot
-        c.platform = VZGenericPlatformConfiguration()
+        // One machine identity per data disk: restoring a saved state needs the same identity as the VM that saved it.
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = stableMachineIdentifier()
+        c.platform = platform
 
         // vda: the read-only root; vdb: the data disk. fsync keeps the data disk safe when the Mac loses power.
         let root = try VZDiskImageStorageDeviceAttachment(url: URL(fileURLWithPath: config.rootfs), readOnly: true, cachingMode: .automatic, synchronizationMode: .none)
@@ -103,6 +106,14 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         let mac = VZMACAddress.randomLocallyAdministered()
         try? mac.string.write(toFile: file, atomically: true, encoding: .utf8)
         return mac
+    }
+
+    private func stableMachineIdentifier() -> VZGenericMachineIdentifier {
+        let file = (config.data as NSString).deletingLastPathComponent + "/machine-id"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: file)), let id = VZGenericMachineIdentifier(dataRepresentation: data) { return id }
+        let id = VZGenericMachineIdentifier()
+        FileManager.default.createFile(atPath: file, contents: id.dataRepresentation, attributes: [.posixPermissions: 0o600])
+        return id
     }
 
     func start() {
@@ -150,6 +161,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     }
 
     private func restore(_ path: String, otherwise boot: @escaping () -> Void) {
+        #if arch(arm64)
         guard #available(macOS 14.0, *) else {
             Out.event(["event": "restore-failed", "message": "saving the VM's state needs macOS 14"])
             return boot()
@@ -167,6 +179,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
                 Thread.detachNewThread { _ = self.agent(["op": "time", "unix": Date().timeIntervalSince1970]) }
             }
         }
+        #else
+        Out.event(["event": "restore-failed", "message": "saving the VM's state needs a Mac with Apple silicon"])
+        boot()
+        #endif
     }
 
     // ------------------------------------------------------------------ vsock
@@ -478,6 +494,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     }
 
     private func save(_ path: String, done: @escaping (String?) -> Void) {
+        #if arch(arm64)
         guard #available(macOS 14.0, *) else { return done("saving the VM's state needs macOS 14") }
         _ = agent(["op": "sync"], timeout: 10)
         queue.async { [self] in
@@ -493,6 +510,9 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
                 }
             }
         }
+        #else
+        done("saving the VM's state needs a Mac with Apple silicon")
+        #endif
     }
 
     private func finish(code: Int32) {

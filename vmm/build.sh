@@ -14,5 +14,7 @@ OPTS="--force --entitlements vmm.entitlements"
 [ "$IDENTITY" = "-" ] || OPTS="$OPTS --options runtime --timestamp"
 codesign $OPTS --sign "$IDENTITY" "$BIN"
 mkdir -p ../out
+# A new file, never written over the old one: macOS kills a signed binary whose file changed in place (exit 137).
+rm -f "../out/docatz-vmm-$ARCH"
 cp "$BIN" "../out/docatz-vmm-$ARCH"
 echo "../out/docatz-vmm-$ARCH ($VERSION, signed by $IDENTITY)"
