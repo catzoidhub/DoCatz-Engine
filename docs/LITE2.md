@@ -1,7 +1,12 @@
 # Lite 2: a daemon of our own? Design and decision
 
-Status: **design only, 2026-11-18. Recommendation: no-go for a full daemon now; go for one bounded experiment (a
-light shim), and revisit after DoCatz ships on its three platforms.**
+Status: **cancelled (user, 2026-11-18).** Lite exists to give users a lighter option than Standard; a daemon of our own
+saves a bounded amount (below) at an unbounded cost, so it is not built — not deferred. The one idea kept is the
+lighter shim (§3 D), as an ordinary change to Lite's guest if it measures lighter. On Linux, where Lite 2 was the only
+planned path, Lite is "the system's Docker run as lightly as possible" (DoCatz TODO #106), never a VM: a VM there is
+heavier than native dockerd while working.
+
+The analysis below is kept as the reason.
 
 "Lite 2" (DoCatz TODO #106) means replacing dockerd + containerd + one containerd-shim per container in the Lite guest
 with one daemon of ours that answers the Docker Engine API and calls the kernel itself. It is the only way to the
@@ -71,7 +76,7 @@ publishes a long list of such fixes; that list is the real cost.
 | **D. Keep dockerd, lighten the shim** | containerd's Rust shim (`containerd-shim-runc-v2-rs`, containerd/rust-extensions) or crun's lower overhead, set as the default runtime in `daemon.json` | the per-container part: 6.5 MB → about 1–2 MB each | Small and reversible: one binary in the guest and a `daemon.json` line; Docker's API and behaviour stay Docker's. Risk: the Rust shim is younger (exec / stats / OOM events must be checked against DoCatz's features list) |
 | **E. Nothing more** | Lite as it is: sleep, wake, answers while asleep | — | none |
 
-## 4. Recommendation
+## 4. Recommendation (taken: A cancelled)
 
 1. **No-go on A (and C) for now.** The saving is real but bounded (~140 MB idle, 6.5 MB per container) and Lite's
    idle state is already 10 MB. The cost is unbounded and lands on one person, in exactly the code where mistakes are
@@ -81,11 +86,9 @@ publishes a long list of such fixes; that list is the real cost.
    `docs/DOCATZ-FEATURES.md`'s checks and the measurements of §1 with 10 and 20 containers, and keep it only if every
    check passes and it saves at least 4 MB per container. If it does, it ships as a capability (`shim-rs`) with
    dockerd's own shim one config line away.
-4. **Revisit A** after DoCatz 1.x is out on macOS, Windows and Linux, if users ask for it — and then start from the
-   Linux side (no VM there, so the daemon is the whole saving) with a compatibility suite first: the docker CLI's and
-   Compose's own integration tests run against the candidate before any feature is called done.
+4. ~~Revisit A later~~ — cancelled by the user: Lite is only worth building where it is lighter.
 
-## 5. If A is ever started: the shape
+## 5. (Cancelled) what A would have looked like
 
 - One static binary in the guest (`docatzd`), beside dockerd at first: its own socket and data directory under
   `/var/lib/docatz` (already kept on the data disk), announced as capability `engine-docatzd`; DoCatz offers it as a
