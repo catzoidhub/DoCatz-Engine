@@ -13,6 +13,9 @@ permissions:
 jobs:
   vmm:
     runs-on: macos-15
+    env:
+      # A step's `if` cannot read secrets (nor env set in that step): whether the certificate is there is decided here.
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the tag matches VERSION
@@ -21,7 +24,7 @@ jobs:
       # Developer ID signing when the secrets exist (as DoCatz's release); else ad hoc, which is enough for the
       # virtualization entitlement (the binary is downloaded by DoCatz, not opened from Finder).
       - name: Import the signing certificate
-        if: env.MAC_CERT_P12 != ''
+        if: env.HAS_MAC_CERT == 'true'
         env:
           MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
@@ -65,8 +68,10 @@ jobs:
           name: guest-${{ matrix.arch }}
           path: out/guest-${{ matrix.arch }}
 
+  # A manual run (workflow_dispatch) only builds and signs, to check the certificate: no source tarball, no release.
   kernel-source:
     needs: guest
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +91,7 @@ jobs:
 
   release:
     needs: [vmm, guest, kernel-source]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
