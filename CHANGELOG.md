@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `docatz.selftest` on the kernel command line: the agent checks the engine by itself (dockerd, a pulled container
+  on the default runtime, an OOM kill reported) and powers off. `scripts/qemu-selftest.sh` boots a guest under QEMU
+  with it; CI does so for the arm64 and x86_64 guests on every build.
+
 ## 0.1.4
 
 - Containers run under containerd's Rust shim by default (`runc-rs`): about 6 MB less per running container

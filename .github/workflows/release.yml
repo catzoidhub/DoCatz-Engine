@@ -87,6 +87,17 @@ jobs:
         run: sh guest/shim/build.sh ${{ matrix.arch }}
       - name: Build the guest
         run: sh guest/build.sh ${{ matrix.arch }}
+      # The guest boots under QEMU with `docatz.selftest`: dockerd up, busybox pulled and run on the default runtime,
+      # an OOM kill reported. KVM when the runner offers it; otherwise emulated (slower, still minutes).
+      - name: Boot the guest and self-test it
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-arm >/dev/null
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          fi
+          sh scripts/qemu-selftest.sh out/guest-${{ matrix.arch }} ${{ matrix.arch }} 900
       - uses: actions/upload-artifact@v4
         with:
           name: guest-${{ matrix.arch }}

@@ -56,6 +56,9 @@ func main() {
 	go serve(portForward, forward)
 	go c.dialHost()
 	go c.watchPorts()
+	if selftestWanted() {
+		go selftest(d)
+	}
 
 	// Outside PID 1 (a test run), SIGTERM stops dockerd first.
 	sig := make(chan os.Signal, 1)

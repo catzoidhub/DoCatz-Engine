@@ -34,6 +34,11 @@ Store Connect API key (`APPLE_API_KEY_P8` base64, `APPLE_API_KEY_ID`, `APPLE_API
 `sh scripts/notarize.sh <version>` on a Mac with the `mrcatz-notary` notarytool profile — it changes no file, so the
 published SHA-256s stay valid.
 
+A guest this Mac cannot run with docatz-vmm (the x86_64 guest on Apple silicon) is checked under QEMU:
+`sh scripts/qemu-selftest.sh out/guest-x86_64 x86_64` boots it with `docatz.selftest` — the agent pulls busybox, runs
+it on the default runtime, checks an OOM kill is reported and prints `docatz-selftest: PASS` (about 20 s emulated on an
+M4; `brew install qemu`). CI does the same for both guests on every build.
+
 To try a VM by hand, write a `config.json` as in the contract (§4) and run
 `out/docatz-vmm-arm64 run --config config.json`; `docatz-vmm ctl --socket <vmm.sock> status` talks to it.
 
