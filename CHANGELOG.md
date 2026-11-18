@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Release tooling: `scripts/notarize.sh <version>` notarizes a published release's docatz-vmm on the maintainer's
+  Mac (no file changes, so the SHA-256s stay); CI notarizes too once an App Store Connect API key is set.
+
 ## 0.1.3
 
 - `docatz-vmm` is signed with Developer ID (Mahryan Rakhmatullah, Q5Q5KKYWU7), with the hardened runtime and a

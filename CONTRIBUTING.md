@@ -28,6 +28,12 @@ The guest is built in an Alpine container of the guest's own architecture, becau
 the root file system is made. On an Apple silicon Mac build `arm64`; the `x86_64` guest is built on an x86_64 machine
 (the CI does both).
 
+Releases (maintainer): a `v<version>` tag builds everything and drafts the release; `docatz-vmm` is signed with
+Developer ID when the `MAC_CERT_P12` / `MAC_CERT_PASSWORD` secrets are set. Notarization runs in CI only with an App
+Store Connect API key (`APPLE_API_KEY_P8` base64, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`); otherwise run
+`sh scripts/notarize.sh <version>` on a Mac with the `mrcatz-notary` notarytool profile — it changes no file, so the
+published SHA-256s stay valid.
+
 To try a VM by hand, write a `config.json` as in the contract (§4) and run
 `out/docatz-vmm-arm64 run --config config.json`; `docatz-vmm ctl --socket <vmm.sock> status` talks to it.
 

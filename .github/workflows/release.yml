@@ -16,6 +16,9 @@ jobs:
     env:
       # A step's `if` cannot read secrets (nor env set in that step): whether the certificate is there is decided here.
       HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12 != '' }}
+      # Notarization in CI needs an App Store Connect API key (Team key, Developer role). Without it the release is
+      # notarized afterwards on the maintainer's Mac: scripts/notarize.sh <version> (same bytes, same SHA-256).
+      HAS_NOTARY_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the tag matches VERSION
@@ -42,6 +45,24 @@ jobs:
         run: |
           sh vmm/build.sh arm64 "${IDENTITY:--}"
           sh vmm/build.sh x86_64 "${IDENTITY:--}"
+      - name: Notarize
+        if: env.HAS_MAC_CERT == 'true' && env.HAS_NOTARY_KEY == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$APPLE_API_KEY_P8" | base64 --decode > notary.p8
+          for arch in arm64 x86_64; do
+            ditto -c -k --keepParent "out/docatz-vmm-$arch" "vmm-$arch.zip"
+            xcrun notarytool submit "vmm-$arch.zip" --key notary.p8 --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
+              --wait --timeout 30m --output-format json > "notary-$arch.json"
+            status=$(python3 -c "import json; print(json.load(open('notary-$arch.json')).get('status',''))")
+            echo "docatz-vmm $arch: $status"
+            [ "$status" = Accepted ] || { cat "notary-$arch.json"; rm notary.p8; exit 1; }
+          done
+          rm notary.p8
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: vmm
