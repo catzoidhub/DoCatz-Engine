@@ -31,5 +31,7 @@ for arch in arm64 x86_64; do
 	fi
 	echo "$a: Accepted ($id)"
 done
-# Gatekeeper now accepts them as notarized (an online check: a bare binary cannot be stapled).
-for arch in arm64; do spctl -a -t exec -vv "$arch/docatz-vmm" 2>&1 | sed "s/^/$arch: /" | head -2; done
+# Accepted is the proof: Gatekeeper looks the ticket up online the first time a downloaded (quarantined) copy runs —
+# a bare binary cannot be stapled, and `spctl -t exec` only judges apps ("does not seem to be an app"). Checked once
+# by hand (0.1.3, 2026-11-18): a quarantined notarized copy runs; an ad-hoc one is blocked with a dialog.
+echo "notarized: docatz-vmm $V, arm64 and x86_64"
