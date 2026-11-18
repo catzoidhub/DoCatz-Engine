@@ -1,10 +1,27 @@
 # Lite 2: a daemon of our own? Design and decision
 
 Status: **cancelled (user, 2026-11-18).** Lite exists to give users a lighter option than Standard; a daemon of our own
-saves a bounded amount (below) at an unbounded cost, so it is not built — not deferred. The one idea kept is the
-lighter shim (§3 D), as an ordinary change to Lite's guest if it measures lighter. On Linux, where Lite 2 was the only
+saves a bounded amount (below) at an unbounded cost, so it is not built — not deferred. The one idea kept was the
+lighter shim (§3 D): built, measured and taken (below). On Linux, where Lite 2 was the only
 planned path, Lite is "the system's Docker run as lightly as possible" (DoCatz TODO #106), never a VM: a VM there is
 heavier than native dockerd while working.
+
+**§3 D done (2026-11-18): the lighter shim is in.** containerd's Rust runc shim (`containerd-shim-runc-v2-rs`,
+rust-extensions shim-v0.12.0) is the guest's default runtime `runc-rs`, with our patch `guest/shim/oom-cgroup2.patch`
+— upstream reports OOM kills only on cgroup v1, so `OOMKilled` was false on our cgroup v2 guest. Measured on the same
+guest, fresh VM each (4 GB, M4):
+
+| | dockerd's Go shim | Rust shim |
+| --- | --- | --- |
+| shim memory per container (anonymous) | 6.4 MB | 0.6 MB |
+| 10 nginx: VM footprint | 709 MB | 653 MB |
+| 10 nginx + 10 busybox: shims (anon / RSS) | 128 / 269 MB | 22 / 89 MB |
+| 10 nginx + 10 busybox: VM footprint | 786 MB | 674 MB |
+
+32 checks of what DoCatz and Compose use pass on it (exit codes, logs, exec with TTY / env / workdir, attach, stats,
+top, pause, cp, stop / kill / restart, restart policies, healthchecks, OOMKilled + `oom` event, published ports,
+container IPs, network DNS, wait, events, rename, binds, volumes, Rosetta, privileged, cgroup limits, `--init`,
+`compose up --wait`, no shim left after stop). `--runtime runc` still picks the Go shim.
 
 The analysis below is kept as the reason.
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Containers run under containerd's Rust shim by default (`runc-rs`): about 6 MB less per running container
+  (20 containers: 674 MB instead of 786 MB for the VM). Our patch reports OOM kills on cgroup v2 (`OOMKilled`, the
+  `oom` event), as dockerd's Go shim does; `--runtime runc` still picks that one. Capability `shim-rs`.
 - Release tooling: `scripts/notarize.sh <version>` notarizes a published release's docatz-vmm on the maintainer's
   Mac (no file changes, so the SHA-256s stay); CI notarizes too once an App Store Connect API key is set.
 

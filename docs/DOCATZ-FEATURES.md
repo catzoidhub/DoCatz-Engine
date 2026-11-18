@@ -31,6 +31,7 @@ This list is what DoCatz does with its engine and how Lite provides it. Status: 
 | Clock after the Mac sleeps | guest time follows | `sync-time`, automatic on wake | ✅ |
 | A guest kernel crash | the engine comes back by itself | guest reboots in place; open connections end; `restart` event | ✅ |
 | Later: Kubernetes (#28), Linux machines (#27) as containers on the same dockerd | full `/lib/modules` (vxlan, ip_vs, br_netfilter, fuse, wireguard…), user namespaces, `/var/lib/docatz` on the data disk, `capabilities` in guest.json | all present | ✅ |
+| Memory per running container | the container runtime's shim | containerd's Rust shim by default (0.6 MB vs 6.4 MB per container), OOM reported on cgroup v2 by our patch | ✅ |
 | Intel Macs | the x86_64 build | docatz-vmm x86_64 + guest x86_64 (no Rosetta, no save / restore) | 🟡 |
 
 Not engine features, nothing to do here: the proxy, CA, resolver and names without a port (DoCatz's own, on the Mac);

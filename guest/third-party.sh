@@ -1,6 +1,6 @@
 #!/bin/sh
 # THIRD-PARTY.md for a guest: every Alpine package in the root file system with its licence, and where its source is.
-# Usage: third-party.sh <packages.txt> <kernel version> <alpine branch> <guest version>
+# Usage: third-party.sh <packages.txt> <kernel version> <alpine branch> <guest version> [rust shim commit]
 set -eu
 cat <<MD
 # Third-party software in the DoCatz Engine guest $4
@@ -17,6 +17,16 @@ The guest (the Linux VM DoCatz's Lite engine runs) is built from Alpine Linux $3
 - **Every other package**: its source is Alpine's: the build recipe at
   https://gitlab.alpinelinux.org/alpine/aports (branch $3-stable) and the upstream files at
   https://distfiles.alpinelinux.org/distfiles/v$3/.
+
+MD
+if [ -n "${5:-}" ]; then
+	cat <<MD
+- **containerd-shim-runc-v2-rs**, the default container shim: containerd's Rust runc shim from
+  https://github.com/containerd/rust-extensions at commit \`$5\`, Apache-2.0, with DoCatz Engine's patch
+  \`guest/shim/oom-cgroup2.patch\` (OOM kills reported on cgroup v2), built by \`guest/shim/build.sh\`.
+MD
+fi
+cat <<MD
 
 | Package | Version | Licence |
 | --- | --- | --- |

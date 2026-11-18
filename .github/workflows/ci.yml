@@ -49,6 +49,9 @@ jobs:
         with:
           go-version-file: agent/go.mod
       # The runner's own arch: Alpine's package scripts run natively in the build container.
+      # containerd's Rust shim with our patch, built first: guest/build.sh makes it the default runtime.
+      - name: Build the container shim
+        run: sh guest/shim/build.sh ${{ matrix.arch }}
       - name: Build the guest
         run: sh guest/build.sh ${{ matrix.arch }}
       - name: Sizes

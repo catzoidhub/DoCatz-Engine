@@ -10,7 +10,7 @@ W=/work
 rm -rf "$OUT" "$W"
 mkdir -p "$OUT" "$W"
 
-apk add --no-cache -q e2fsprogs kmod cpio gzip xz zstd findutils busybox-static file
+apk add --no-cache -q e2fsprogs kmod cpio gzip xz zstd findutils busybox-static file jq
 
 apkroot() { # <root> <scripts|no-scripts> <packages…>
 	r="$1"
@@ -77,6 +77,19 @@ depmod -b "$R" "$KVER"
 cp -a "$SRC/guest/rootfs/." "$R/"
 cp "$SRC/out/agent-$( [ "$ARCH" = arm64 ] && echo arm64 || echo amd64 )" "$R/usr/bin/docatz-agent"
 chmod 0755 "$R/usr/bin/docatz-agent" "$R/sbin/docatz-init"
+# containerd's Rust shim (guest/shim/build.sh), when built: runtime `runc-rs`, made the default.
+SHIM_COMMIT=""
+CAPS_EXTRA=""
+if [ -f "$SRC/out/containerd-shim-runc-v2-rs-$ARCH" ]; then
+	install -m 0755 "$SRC/out/containerd-shim-runc-v2-rs-$ARCH" "$R/usr/bin/containerd-shim-runc-v2-rs"
+	# The default: about 6 MB less per running container than dockerd's Go shim, every Docker feature DoCatz uses
+	# checked (LITE2.md §3 D). `--runtime runc` still picks the Go shim; dropping default-runtime brings it back for all.
+	jq '. + {"runtimes": {"runc-rs": {"runtimeType": "io.containerd.runc.v2-rs"}}, "default-runtime": "runc-rs"}' "$R/etc/docker/daemon.json" > "$W/daemon.json"
+	cat "$W/daemon.json" > "$R/etc/docker/daemon.json"
+	SHIM_COMMIT=$(cat "$SRC/out/containerd-shim-runc-v2-rs-$ARCH.commit" 2>/dev/null || echo unknown)
+	CAPS_EXTRA=', "shim-rs"'
+	echo "rust shim: the default runtime (runc-rs)"
+fi
 printf 'docatz\n' > "$R/etc/hostname"
 printf '127.0.0.1\tlocalhost docatz\n::1\tlocalhost docatz\n' > "$R/etc/hosts"
 # What the image does not need at run time.
@@ -103,9 +116,9 @@ cat > "$OUT/guest.json" <<JSON
   "protocol": 1,
   "arch": "$ARCH",
   "cmdline": "console=hvc0 loglevel=4 cgroup_no_v1=all init_on_alloc=0 oops=panic panic=-1",
-  "capabilities": ["docker", "ports-tcp", "ports-udp", "ports-loopback", "fsevents", "trim", "rosetta", "restart-on-panic", "data-dir", "shared-mounts"],
+  "capabilities": ["docker", "ports-tcp", "ports-udp", "ports-loopback", "fsevents", "trim", "rosetta", "restart-on-panic", "data-dir", "shared-mounts"$CAPS_EXTRA],
   "versions": { "kernel": "$KVER", "alpine": "$ALPINE", "docker": "$(v docker-engine)", "containerd": "$(v containerd)", "runc": "$(v runc)" }
 }
 JSON
-sh "$SRC/guest/third-party.sh" "$OUT/packages.txt" "$KVER" "$ALPINE" "$VERSION" > "$OUT/THIRD-PARTY.md"
+sh "$SRC/guest/third-party.sh" "$OUT/packages.txt" "$KVER" "$ALPINE" "$VERSION" "$SHIM_COMMIT" > "$OUT/THIRD-PARTY.md"
 ls -la "$OUT"

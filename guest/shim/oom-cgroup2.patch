@@ -1,0 +1,93 @@
+diff --git a/crates/runc-shim/Cargo.toml b/crates/runc-shim/Cargo.toml
+index 4a545a2..4933a0e 100644
+--- a/crates/runc-shim/Cargo.toml
++++ b/crates/runc-shim/Cargo.toml
+@@ -28,7 +28,7 @@ doc = false
+ containerd-shim = { path = "../shim", version = "0.12.0", features = ["async"] }
+ libc.workspace = true
+ log.workspace = true
+-nix = { workspace = true, features = ["socket", "uio", "term", "signal"] }
++nix = { workspace = true, features = ["socket", "uio", "term", "signal", "inotify"] }
+ oci-spec = { workspace = true, features = ["runtime"] }
+ runc = { path = "../runc", version = "0.4.0", features = ["async"] }
+ serde = { workspace = true, features = ["derive", "std"] }
+diff --git a/crates/runc-shim/src/cgroup_memory.rs b/crates/runc-shim/src/cgroup_memory.rs
+index 247ad4f..52a67b8 100644
+--- a/crates/runc-shim/src/cgroup_memory.rs
++++ b/crates/runc-shim/src/cgroup_memory.rs
+@@ -196,3 +196,59 @@ mod tests {
+         }
+     }
+ }
++
++/// cgroup v2: the kernel counts OOM kills in the container cgroup's `memory.events` (`oom_kill N`) and reports a change
++/// of that file to inotify as IN_MODIFY. One message per kill; the watch ends when the cgroup is removed (IN_IGNORED).
++pub async fn register_memory_event_v2(key: &str, pid: u32) -> Result<Receiver<String>> {
++    use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
++
++    let proc_path = format!("/proc/{}/cgroup", pid);
++    let cgroups = read_to_string(&proc_path)
++        .await
++        .map_err(io_error!(e, "open {}.", &proc_path))?;
++    let relative = cgroups
++        .lines()
++        .find_map(|line| line.strip_prefix("0::"))
++        .ok_or(Error::Other("cgroup v2 line not found".into()))?;
++    let events = format!("/sys/fs/cgroup{}/memory.events", relative.trim_end());
++
++    fn oom_kills(path: &str) -> Option<u64> {
++        std::fs::read_to_string(path)
++            .ok()?
++            .lines()
++            .find_map(|line| line.strip_prefix("oom_kill "))
++            .and_then(|n| n.trim().parse().ok())
++    }
++
++    let mut seen = oom_kills(&events).ok_or(Error::Other(format!("cannot read {}", events)))?;
++    let inotify = Inotify::init(InitFlags::IN_CLOEXEC).map_err(other_error!("inotify init:"))?;
++    inotify
++        .add_watch(events.as_str(), AddWatchFlags::IN_MODIFY)
++        .map_err(other_error!("inotify watch:"))?;
++
++    let (sender, receiver) = mpsc::channel(128);
++    let key = key.to_string();
++    std::thread::spawn(move || loop {
++        let read = match inotify.read_events() {
++            Ok(read) => read,
++            Err(_) => return,
++        };
++        if read
++            .iter()
++            .any(|e| e.mask.contains(AddWatchFlags::IN_IGNORED))
++        {
++            return;
++        }
++        match oom_kills(&events) {
++            Some(n) if n > seen => {
++                seen = n;
++                if sender.blocking_send(key.clone()).is_err() {
++                    return;
++                }
++            }
++            Some(_) => {}
++            None => return,
++        }
++    });
++    Ok(receiver)
++}
+diff --git a/crates/runc-shim/src/task.rs b/crates/runc-shim/src/task.rs
+index ca8a503..d5980fc 100644
+--- a/crates/runc-shim/src/task.rs
++++ b/crates/runc-shim/src/task.rs
+@@ -166,6 +166,11 @@ async fn monitor_oom(id: &String, pid: u32, tx: EventSender) -> Result<()> {
+         .map_err(other_error!("register_memory_event failed:"))?;
+ 
+         run_oom_monitor(rx, id.to_string(), tx);
++    } else {
++        let rx = cgroup_memory::register_memory_event_v2(id, pid)
++            .await
++            .map_err(other_error!("register_memory_event_v2 failed:"))?;
++        run_oom_monitor(rx, id.to_string(), tx);
+     }
+     Ok(())
+ }
