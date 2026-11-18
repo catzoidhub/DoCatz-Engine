@@ -7,7 +7,7 @@ DoCatz Engine is the lightweight engine of DoCatz's Lite mode: a VM helper on yo
 **Please do not open a public issue.** Report it privately instead:
 
 1. Open the repository's **Security** tab → **Report a vulnerability**
-   ([direct link](https://github.com/catzoidhub/docatz-engine/security/advisories/new)). Only the maintainer sees it.
+   ([direct link](https://github.com/catzoidhub/DoCatz-Engine/security/advisories/new)). Only the maintainer sees it.
 2. Say what is affected, how to reproduce it, and what an attacker could do with it. A proof of concept helps.
 
 Security reports are read before anything else, as soon as the maintainer can — there is no fixed response time yet.

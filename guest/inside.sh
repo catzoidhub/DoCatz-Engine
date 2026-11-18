@@ -86,7 +86,7 @@ rm -rf "$R/etc/apk" "$R/lib/apk" "$R/usr/share/apk"
 echo "$VERSION" > "$R/etc/docatz-guest"
 # docker info's OperatingSystem: what the engine is, then what it is built on.
 rm -f "$R/etc/os-release"
-printf 'NAME="DoCatz Engine"\nID=docatz\nID_LIKE=alpine\nVERSION_ID=%s\nPRETTY_NAME="DoCatz Engine %s (Alpine %s)"\nHOME_URL="https://github.com/catzoidhub/docatz-engine"\n' \
+printf 'NAME="DoCatz Engine"\nID=docatz\nID_LIKE=alpine\nVERSION_ID=%s\nPRETTY_NAME="DoCatz Engine %s (Alpine %s)"\nHOME_URL="https://github.com/catzoidhub/DoCatz-Engine"\n' \
 	"$VERSION" "$VERSION" "$(cut -d. -f1,2 /etc/alpine-release)" > "$R/etc/os-release"
 
 used=$(du -sm "$R" | cut -f1)
@@ -102,7 +102,7 @@ cat > "$OUT/guest.json" <<JSON
   "version": "$VERSION",
   "protocol": 1,
   "arch": "$ARCH",
-  "cmdline": "console=hvc0 loglevel=4 cgroup_no_v1=all",
+  "cmdline": "console=hvc0 loglevel=4 cgroup_no_v1=all init_on_alloc=0 oops=panic panic=-1",
   "versions": { "kernel": "$KVER", "alpine": "$ALPINE", "docker": "$(v docker-engine)", "containerd": "$(v containerd)", "runc": "$(v runc)" }
 }
 JSON

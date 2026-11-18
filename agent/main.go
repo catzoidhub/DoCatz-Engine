@@ -318,9 +318,12 @@ func forward(c net.Conn) {
 	if err != nil || port < 1 || port > 65535 {
 		return
 	}
+	// 127.0.0.1 first (it also reaches 0.0.0.0 listeners), then ::1 for an IPv6-only listener.
 	t, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", f[1]), 5*time.Second)
 	if err != nil {
-		return
+		if t, err = net.DialTimeout("tcp", net.JoinHostPort("::1", f[1]), 5*time.Second); err != nil {
+			return
+		}
 	}
 	// Bytes the reader already took past the header belong to the stream.
 	if n := r.Buffered(); n > 0 {
@@ -509,8 +512,9 @@ func portList(ports []int) []map[string]any {
 	return out
 }
 
-// watchPorts reads the guest's listening TCP sockets once a second and sends the list when it changes. Only sockets
-// bound to every address count (0.0.0.0 / ::): what `docker run -p` makes, not a guest-only service on 127.0.0.1.
+// watchPorts reads the guest's listening TCP sockets once a second and sends the list when it changes: those bound to
+// every address (0.0.0.0 / ::, what `docker run -p` makes) and those on the VM's loopback (127.0.0.1 / ::1), as Lima
+// forwards them — DoCatz's router (domains, DBCatz's database ports) runs on the VM's host network on 127.0.0.1.
 func (c *control) watchPorts() {
 	for {
 		ports := listening()
@@ -540,7 +544,7 @@ func listening() []int {
 				continue
 			}
 			addr, portHex, ok := strings.Cut(fields[1], ":")
-			if !ok || strings.Trim(addr, "0") != "" {
+			if !ok || !forwardable(addr) {
 				continue
 			}
 			if p, err := strconv.ParseInt(portHex, 16, 32); err == nil && p > 0 {
@@ -555,6 +559,11 @@ func listening() []int {
 		}
 	}
 	return out
+}
+
+// forwardable: any address, or loopback (127.0.0.1 is 0100007F, ::1 is 0…01000000 in /proc/net/tcp*'s byte order).
+func forwardable(addr string) bool {
+	return strings.Trim(addr, "0") == "" || addr == "0100007F" || addr == "00000000000000000000000001000000"
 }
 
 func equal(a, b []int) bool {

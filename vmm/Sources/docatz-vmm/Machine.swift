@@ -16,7 +16,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private var vm: VZVirtualMachine!
     private var socketDevice: VZVirtioSocketDevice?
     private var balloon: VZVirtioTraditionalMemoryBalloonDevice?
-    private let started = Date()
+    private var started = Date()
+    private var built: VZVirtualMachineConfiguration?
+    /// Times the guest stopped by itself (a kernel panic reboots it): restarted up to 3 times a minute.
+    private var crashes: [Date] = []
 
     private let lock = NSLock()
     private var state = "starting"
@@ -33,6 +36,9 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private var forwards: [UInt16: [Int32]] = [:]
     private var forwardErrors: [UInt16: String] = [:]
     private var signalSources: [DispatchSourceSignal] = []
+    /// Host-side ends of the Docker socket and port connections now open: closed when the guest goes away, so no client
+    /// waits forever on a guest that rebooted.
+    private var active = Set<Int32>()
 
     init(config: Config) {
         self.config = config
@@ -135,29 +141,56 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
             s.resume()
             signalSources.append(s)
         }
-        queue.async { [self] in
-            vm = VZVirtualMachine(configuration: built, queue: queue)
-            vm.delegate = self
-            socketDevice = vm.socketDevices.first as? VZVirtioSocketDevice
-            balloon = vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice
-            // The agent calls in on the control port as soon as it runs (polling the guest from here stacked up
-            // connects that only failed after the guest's vsock driver loaded: 30 s boots).
-            let listener = VZVirtioSocketListener()
-            listener.delegate = self
-            socketDevice?.setSocketListener(listener, forPort: GuestPort.control)
-            socketListener = listener
-            let boot = { [self] in
-                vm.start { [self] result in
-                    if case .failure(let e) = result { fail("the VM did not start: \(e.localizedDescription)") }
-                    Out.log("VM started")
-                    self.agentDeadline()
-                }
-            }
-            if let from = config.restoreFrom, FileManager.default.fileExists(atPath: from) {
-                restore(from, otherwise: boot)
-            } else { boot() }
-        }
+        self.built = built
+        queue.async { [self] in createAndBoot(restoreFrom: config.restoreFrom) }
         watchWake()
+    }
+
+    /// Makes the VM object and boots it (or restores a saved state). On `queue`.
+    private func createAndBoot(restoreFrom: String?) {
+        vm = VZVirtualMachine(configuration: built!, queue: queue)
+        vm.delegate = self
+        socketDevice = vm.socketDevices.first as? VZVirtioSocketDevice
+        balloon = vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice
+        // The agent calls in on the control port as soon as it runs (polling the guest from here stacked up
+        // connects that only failed after the guest's vsock driver loaded: 30 s boots).
+        let listener = VZVirtioSocketListener()
+        listener.delegate = self
+        socketDevice?.setSocketListener(listener, forPort: GuestPort.control)
+        socketListener = listener
+        let boot = { [self] in
+            vm.start { [self] result in
+                if case .failure(let e) = result { fail("the VM did not start: \(e.localizedDescription)") }
+                Out.log("VM started")
+                self.agentDeadline()
+            }
+        }
+        if let from = restoreFrom, FileManager.default.fileExists(atPath: from) {
+            restore(from, otherwise: boot)
+        } else { boot() }
+    }
+
+    /// The guest stopped without being asked (the kernel panicked and rebooted, cmdline `oops=panic panic=-1`): boot it
+    /// again, at most 3 times a minute, so one bad boot costs a few seconds instead of a dead engine.
+    private func restartAfterCrash(_ why: String) -> Bool {
+        lock.lock()
+        let now = Date()
+        crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+        let again = !stopping && crashes.count <= 3
+        if again {
+            state = "starting"
+            dockerReady = false
+            agentVersion = nil
+            bootMs = nil
+            started = now
+        }
+        let n = crashes.count
+        lock.unlock()
+        guard again else { return false }
+        Out.log("guest stopped by itself (\(why)); starting it again (\(n) in the last minute)")
+        emit(["event": "state", "state": "starting", "restart": n, "reason": why])
+        createAndBoot(restoreFrom: nil)
+        return true
     }
 
     private func restore(_ path: String, otherwise boot: @escaping () -> Void) {
@@ -216,9 +249,10 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
 
     /// No agent within two minutes: the guest did not come up.
     private func agentDeadline() {
+        let boot = started
         DispatchQueue.global().asyncAfter(deadline: .now() + 120) { [self] in
             lock.lock()
-            let none = agentVersion == nil && !stopping
+            let none = agentVersion == nil && !stopping && started == boot
             lock.unlock()
             if none { fail("the guest agent did not answer within two minutes — see the console log") }
         }
@@ -262,7 +296,13 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
         lock.unlock()
         for (_, done) in waiting { done(["ok": false, "error": "the guest agent went away"]) }
         close(fd)
-        if !stopping { Out.log("guest agent connection closed") }
+        lock.lock()
+        let replaced = agentFd >= 0   // a newer connection already took over (the agent redialled)
+        lock.unlock()
+        if !stopping && !replaced {
+            Out.log("guest agent connection closed")
+            guestWentAway()
+        }
     }
 
     private func handleAgentEvent(_ msg: JSON) {
@@ -334,7 +374,41 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
             usleep(100_000)
         }
         guard let g = vsock(GuestPort.docker) else { close(c); return }
-        join(c, g)
+        track(c, g)
+    }
+
+    private func track(_ c: Int32, _ g: Int32) {
+        lock.lock()
+        active.insert(c)
+        lock.unlock()
+        join(c, g) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.active.remove(c)
+            self.lock.unlock()
+        }
+    }
+
+    /// The agent's connection closed without a stop: the guest rebooted (a kernel panic, `oops=panic panic=-1`) inside
+    /// the same VM. Open connections end now; `running` comes again when the new guest's dockerd is ready.
+    private func guestWentAway() {
+        lock.lock()
+        if stopping { lock.unlock(); return }
+        let now = Date()
+        crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+        let n = crashes.count
+        state = "starting"
+        dockerReady = false
+        agentVersion = nil
+        bootMs = nil
+        started = now
+        let open = active
+        lock.unlock()
+        for fd in open { shutdown(fd, SHUT_RDWR) }
+        Out.log("the guest went away (\(open.count) connections closed); waiting for it to come back")
+        emit(["event": "state", "state": "starting", "restart": n, "reason": "the guest restarted"])
+        if n > 3 { fail("the guest restarted \(n) times in a minute — see the console log") }
+        agentDeadline()
     }
 
     private func updateForwards(_ list: [JSON]) {
@@ -378,7 +452,7 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     private func serveForward(_ c: Int32, port: UInt16) {
         guard let g = vsock(GuestPort.forward) else { close(c); return }
         guard writeAll(g, "tcp \(port)\n".data(using: .utf8)!) else { close(c); close(g); return }
-        join(c, g)
+        track(c, g)
     }
 
     // ------------------------------------------------------------------ DoCatz's control socket
@@ -544,10 +618,12 @@ final class Machine: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
 
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         Out.log("guest stopped")
+        if restartAfterCrash("the guest restarted") { return }
         finish(code: 0)
     }
 
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
+        if restartAfterCrash(error.localizedDescription) { return }
         lock.lock()
         state = "error"
         lock.unlock()

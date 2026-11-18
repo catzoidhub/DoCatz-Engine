@@ -7,8 +7,8 @@ says honestly what you can expect.
 
 | You want to … | Go to |
 | --- | --- |
-| Report a bug | **Help → Report a Bug…** in DoCatz (it adds the version, the engine log and your system details), or [open an issue](https://github.com/catzoidhub/docatz-engine/issues/new) |
-| Suggest an idea or ask a question | **Help → Send Feedback…** in DoCatz, or [GitHub Discussions](https://github.com/catzoidhub/docatz-engine/discussions) if they are on |
+| Report a bug | **Help → Report a Bug…** in DoCatz (it adds the version, the engine log and your system details), or [open an issue](https://github.com/catzoidhub/DoCatz-Engine/issues/new) |
+| Suggest an idea or ask a question | **Help → Send Feedback…** in DoCatz, or [GitHub Discussions](https://github.com/catzoidhub/DoCatz-Engine/discussions) if they are on |
 | Report a security problem | **Not in a public issue** — see [`SECURITY.md`](SECURITY.md) |
 | Read the docs first | [catzoid.com/docs](https://catzoid.com/docs) — FAQ and Troubleshooting answer the usual questions |
 | Talk with other users | [catzoid.com/community](https://catzoid.com/community) |

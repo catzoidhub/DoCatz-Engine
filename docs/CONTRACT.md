@@ -25,7 +25,7 @@ build without Rosetta.
 
 ## 2. Release files
 
-A release is tagged `v<version>` on `catzoidhub/docatz-engine` and holds:
+A release is tagged `v<version>` on `catzoidhub/DoCatz-Engine` and holds:
 
 | Asset | Contents |
 | --- | --- |
@@ -37,7 +37,7 @@ A release is tagged `v<version>` on `catzoidhub/docatz-engine` and holds:
 | `manifest.json` | the list below, so DoCatz can pin one file instead of eight |
 | `SHA256SUMS` | `sha256sum` lines for every other asset |
 
-URL of each: `https://github.com/catzoidhub/docatz-engine/releases/download/v<version>/<asset>`.
+URL of each: `https://github.com/catzoidhub/DoCatz-Engine/releases/download/v<version>/<asset>`.
 
 `manifest.json`:
 
@@ -157,6 +157,9 @@ On `run`'s stdout and on subscribed connections:
 {"event":"state","state":"starting"}
 {"event":"state","state":"running","bootMs":1830}      the agent answered and dockerd is ready on the socket
 {"event":"ports","ports":[{"proto":"tcp","port":8080}]}  the forwarded list changed
+{"event":"state","state":"starting","restart":1,"reason":"the guest restarted"}
+                                          the guest crashed (a kernel panic reboots it) and is booting again;
+                                          at most 3 times a minute, then `error` and exit 1
 {"event":"state","state":"stopping"}
 {"event":"state","state":"stopped"}
 {"event":"error","message":"..."}
@@ -168,9 +171,13 @@ On `run`'s stdout and on subscribed connections:
   connection goes over vsock to the agent, which joins it to `/var/run/docker.sock` in the guest. The socket exists
   from `starting` on; connections made before dockerd is ready wait for it (up to 60 s).
 - **Ports**: every TCP port the guest listens on for all addresses (`0.0.0.0` / `::`, which is what `docker run -p`
-  makes) is listened on at `127.0.0.1` and `::1` on the Mac, and each connection goes over vsock to the agent, which
-  connects to it in the guest. A port that is taken on the Mac is skipped and reported in the `ports` event with
-  `"error":"in use"`. UDP: not yet.
+  makes) **or on the VM's loopback** (`127.0.0.1` / `::1`, as Lima forwards them: DoCatz's `docatz-router` runs on the
+  VM's host network on 127.0.0.1) is listened on at `127.0.0.1` and `::1` on the Mac, and each connection goes over
+  vsock to the agent, which connects to it in the guest. A port that is taken on the Mac is skipped and reported in the
+  `ports` event with `"error":"in use"`. UDP: not yet.
+- **A guest that crashes** reboots inside the same VM (`oops=panic panic=-1` in guest.json's cmdline): the open Docker
+  and port connections end at once (no client waits on a dead guest), `state` goes `starting` with `restart` and back
+  to `running` about a second later. More than 3 restarts in a minute ends `run` with an error.
 - **Container IPs**: the guest has a NAT network (Virtualization.framework's), so the Mac reaches the guest at its
   address; DoCatz's router (`docatz-router` container) works as on Standard.
 - **Mounts**: `shares` over virtiofs at the same paths; file events through `fsevents` above.
