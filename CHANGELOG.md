@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 - Containers run under containerd's Rust shim by default (`runc-rs`): about 6 MB less per running container
   (20 containers: 674 MB instead of 786 MB for the VM). Our patch reports OOM kills on cgroup v2 (`OOMKilled`, the
